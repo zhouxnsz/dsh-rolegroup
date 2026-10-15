@@ -224,9 +224,16 @@ Behaviour notes:
 ## 7. Development
 
 ```sh
-npm test            # offline smoke suite (87 pure-logic cases, ~0.2s; pretest runs link:deps)
-npm run link:deps   # ★ rerun after a dsh upgrade / deployment-tree move: symlinks the tree's schemastery here
+npm install         # ★ required once after cloning: devDependency esbuild (client build)
+npm test            # offline smoke suite (89 pure-logic cases, ~0.2s; pretest runs link:deps)
+npm run link:deps   # ★ required once after cloning, and after a dsh upgrade / tree move
+npm run build:client  # after editing src/client/** or lib/roles.js: rebuild lib/client.js
 ```
+
+> **The first two are mandatory after cloning**, otherwise you will see:
+> ① without `npm install` → `npm test`'s client-build case fails with `ERR_MODULE_NOT_FOUND: esbuild`;
+> ② without `link:deps` → dsh prints `[dsh-rolegroup] 无法使用部署树的 @deepseek-ai/schemastery …` at startup and
+> the plugin **runs host-only** (role tools still work); only the Settings section is absent.
 
 > **What `link:deps` is for**: this plugin is a `link:` package (its real path is this repo), so by Node's realpath
 > rule it **cannot bare-import `@deepseek-ai/*`**; and the settings model requires the entry to **statically export** a

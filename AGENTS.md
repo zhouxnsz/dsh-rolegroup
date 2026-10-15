@@ -67,8 +67,9 @@ dsh 的**角色化委派插件**：角色 = 名字 + 绑定模型 + persona；�
 ## 开发流程
 
 ```sh
+npm install           # ★ 首次 clone 后必跑（devDependency esbuild）
 npm test              # 离线 smoke suite（纯逻辑，Node 直跑，无浏览器依赖）
-npm run link:deps     # dsh 升级/换部署树后必须重跑（见下）
+npm run link:deps     # ★ 首次 clone 后、以及 dsh 升级/换部署树后必跑（见下）
 npm run build:client  # 重建 lib/client.js
 ```
 

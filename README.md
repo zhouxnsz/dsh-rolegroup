@@ -195,9 +195,16 @@ fallback deepseek-official/deepseek-flash ✅       ✅
 ## 7. 开发
 
 ```sh
-npm test            # 离线 smoke test（87 项纯逻辑，约 0.2s；pretest 会自动跑 link:deps）
-npm run link:deps   # ★ dsh 升级/换部署树后必须重跑：把部署树的 schemastery 软链进本仓库
+npm install         # ★ 首次 clone 后必跑：devDependency esbuild（客户端构建需要）
+npm test            # 离线 smoke test（89 项纯逻辑，约 0.2s；pretest 会自动跑 link:deps）
+npm run link:deps   # ★ 首次 clone 后、以及 dsh 升级/换部署树后必跑：把部署树的 schemastery 软链进本仓库
+npm run build:client  # 改了 src/client/** 或 lib/roles.js 后：重建产物 lib/client.js
 ```
+
+> **首次 clone 的两步是必须的**，否则会分别看到：
+> ① 缺 `npm install` → `npm test` 的客户端构建用例报 `ERR_MODULE_NOT_FOUND: esbuild`；
+> ② 缺 `link:deps` → dsh 启动时打一条 `[dsh-rolegroup] 无法使用部署树的 @deepseek-ai/schemastery …`，
+> **插件仍按 host-only 运行**（角色工具照常可用），只是设置页那一节缺席。
 
 > **`link:deps` 是干什么的**：本插件是 `link:` 形态（真实路径 = 本仓库），按 realpath 规则**无法裸导入 `@deepseek-ai/*`**；
 > 而 settings 范式要求条目**静态导出** schemastery `Config`，不能延迟解析——故把部署树的 schemastery 软链进本仓库。
