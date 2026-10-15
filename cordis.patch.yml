@@ -1,0 +1,13 @@
+# dsh-rolegroup bundle patch: mount the rolegroup plugin into the host layer.
+# At load time it reads the role config (project `.dsh/rolegroup.jsonc` of the
+# launch cwd, else `$DSH_HOME/rolegroup.jsonc`, else built-in defaults) and
+# dynamically registers one `@deepseek-ai/dsh-tool-subagent` instance per role
+# (fixed provider/model + persona + maxDepth:1 — depth 0 would
+# 注：v0.5 起不再挂 toolFilter（readonly 已移除：工具面白名单表达不了权限边界）
+# also block top-level delegations).
+#
+# This patch is applied over the dsh-base layer; later layers (the profile's
+# own cordis.patch.yml and --patch overlays) can still address this row by id.
+- insert:
+    - id: dsh-rolegroup
+      name: 'dsh-rolegroup'

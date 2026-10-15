@@ -1,0 +1,61 @@
+{
+  "name": "dsh-rolegroup",
+  "version": "0.5.0",
+  "description": "角色化委派层：角色（名字 + 绑定模型 + persona）× dsh-tool-subagent 实例；只读靠会话级 permission preset，与 dsh-changeflow 松耦合配合",
+  "license": "MIT",
+  "author": "Zhou.XiaoNing",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zhouxnsz/dsh-rolegroup.git"
+  },
+  "homepage": "https://github.com/zhouxnsz/dsh-rolegroup#readme",
+  "bugs": {
+    "url": "https://github.com/zhouxnsz/dsh-rolegroup/issues"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "plugin",
+    "roles",
+    "subagent",
+    "delegation"
+  ],
+  "main": "lib/index.js",
+  "type": "module",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "src",
+    "scripts",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "scripts": {
+    "link:deps": "node scripts/link-deployment-deps.mjs",
+    "pretest": "node scripts/link-deployment-deps.mjs",
+    "test": "node tests/smoke.mjs",
+    "build:client": "node scripts/build-client.mjs"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-plugin-manager",
+        "@deepseek-ai/dsh-api-remotes"
+      ]
+    }
+  },
+  "private": true,
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}

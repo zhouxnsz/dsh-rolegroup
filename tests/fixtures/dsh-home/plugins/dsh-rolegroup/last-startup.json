@@ -1,0 +1,52 @@
+{
+  "time": "2026-09-22T12:09:27.382Z",
+  "configSource": null,
+  "configError": null,
+  "registered": [
+    {
+      "toolName": "analyst",
+      "provider": "qwen-token-plan-cn",
+      "model": "qwen3.8-max",
+      "readonly": true
+    },
+    {
+      "toolName": "planner",
+      "provider": "kimi-coding",
+      "model": "k3",
+      "readonly": false
+    },
+    {
+      "toolName": "coder",
+      "provider": "kimi-coding",
+      "model": "k3",
+      "readonly": false
+    },
+    {
+      "toolName": "reviewer",
+      "provider": "qwen-token-plan-cn",
+      "model": "qwen3.8-max",
+      "readonly": true
+    },
+    {
+      "toolName": "scout",
+      "provider": "deepseek-official",
+      "model": "deepseek-flash",
+      "readonly": true
+    },
+    {
+      "toolName": "scribe",
+      "provider": "qwen-token-plan-cn",
+      "model": "qwen3.8-flash",
+      "readonly": false
+    },
+    {
+      "toolName": "fallback",
+      "provider": "example-provider",
+      "model": "example-model",
+      "readonly": true
+    }
+  ],
+  "failed": [],
+  "invalid": [],
+  "problems": []
+}
