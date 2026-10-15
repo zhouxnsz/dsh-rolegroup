@@ -2105,7 +2105,7 @@ ok('controller: 零浏览器依赖——controller.js 全文无 document/window/
 // AC-27/28/29 为实测类（需重启 dsh web + 人工操作），本文件只落源码文本级断言。
 // 纪律：node 解析不了 JSX——src/client/card.jsx 一律 readFileSync 原文断言，不得 import。
 
-await okAsync('client-index: 槽位注册参数与 v0.4 契约一致——5 元素 inject / plugins.item / id / whileServed 门控（v0.4/AC-17、AC-18）', async () => {
+await okAsync('client-index: 槽位注册参数与 v0.4 契约一致——5 元素 inject / settings.section / id / whileServed 门控（v0.4/AC-17、AC-18）', async () => {
   const src = readFileSync(fileURLToPath(new URL('../src/client/index.js', import.meta.url)), 'utf8')
   const srcMod = await import(new URL('../src/client/index.js', import.meta.url))
   assert.deepEqual(srcMod.inject, ['slots', 'locale', 'remote', 'remote.session', 'configForms'],
@@ -2115,9 +2115,9 @@ await okAsync('client-index: 槽位注册参数与 v0.4 契约一致——5 元�
     "'dsh-rolegroup: dictionaries'",
     "ctx.configForms.get(ROLEGROUP_CLIENT_NS)",
     "ctx.configForms.whileServed([ROLEGROUP_CLIENT_NS]",
-    "ctx.slots.inject('plugins.item'",
-    "name: 'plugins.item'",
-    "id: ROLEGROUP_CLIENT_NS",
+    "ctx.slots.inject('settings.section'",
+    "name: 'settings.section'",
+    "id: 'rolegroup'",
     "locale: 'rolegroup'",
     'inject: () => controller.inject()',
     'RolegroupCard',
@@ -2251,7 +2251,7 @@ await okAsync('client-bundle: 重建产物仍满足 wrapper 形状且内联 v0.4
   assert.deepEqual(lines.slice(-3).map((l) => l.trim()), ['return module.exports;', '}', '});'], `尾部三行实为: ${JSON.stringify(lines.slice(-3))}`)
   assert.ok(!/^\s*(import|export)\s/m.test(bundle), '产物不得有顶层 import/export 语句')
   // v0.4 注册痕迹：新槽位/新服务/门控必须真的进产物
-  assert.ok(/name:\s*["']plugins\.item["']/.test(bundle), '产物须内联 plugins.item 槽位名')
+  assert.ok(/name:\s*["']settings\.section["']/.test(bundle), '产物须内联 settings.section 槽位名')
   assert.ok(bundle.includes('whileServed'), '产物须含 configForms.whileServed 门控')
   assert.ok(bundle.includes('configForms'), '产物须含 configForms 服务用法')
   assert.ok(bundle.includes('remote.session'), '产物须含 5 元素 inject 清单（remote.session）')
@@ -2302,7 +2302,7 @@ await okAsync('client-index 门控时序：未 serve 不注册、serve 后 slots
   const registerFn = calls.whileServed[0][1]
   registerFn(new Set(['dsh-rolegroup']))
   assert.equal(calls.slotsInject.length, 1, 'serve 后 slots.inject 须恰好调用 1 次')
-  assert.equal(calls.slotsInject[0][0], 'plugins.item', '槽位名须为 0.1.7 的 plugins.item')
+  assert.equal(calls.slotsInject[0][0], 'settings.section', '槽位名须为 settings.section（设置页导航一节）')
   const injectCb = calls.slotsInject[0][1]
   assert.equal(typeof injectCb, 'function', 'slots.inject 第二参数须为函数')
   assert.equal(injectCb.constructor.name, 'AsyncFunction', 'inject 回调须为 async 函数')
@@ -2324,6 +2324,13 @@ await okAsync('client-index: 卡片注册必须带 label（否则 Plugins 页列
   assert.ok(/label:\s*\(\)\s*=>\s*t\(/.test(src), 'label 必须走词典 t(...)，不得写死文案')
   assert.ok(/ctx\.locale\.bind\(/.test(src), 'label 的 t 须来自 ctx.locale.bind(...)（官方同款）')
   assert.ok(/t\('title'\)/.test(src), 'label 应取词典的 title 键（与卡片标题一致）')
+  // ② 槽位纪律（2026-10-15 用户拍板）：注册进 `settings.section`，**不得**再回到 `plugins.item`。
+  // 原因：Plugins 页会把所有 plugins.item 卡片无条件追加进「官方」组，而本插件不是官方插件
+  //（host 侧 installed 看 profile dependencies、optional 看硬编码 OPTIONAL_BUNDLES，两者我们都不满足），
+  // 于是那一行会被错误地标成"官方"。撤掉卡片后我们不再出现在该组，与装法无关。
+  assert.ok(/name:\s*'settings\.section'/.test(src), "必须注册进 settings.section")
+  assert.ok(!/'plugins\.item'/.test(src), "不得再注册进 plugins.item（会被误归入「官方」组）")
+  assert.ok(/order:\s*\d+/.test(src), 'settings.section 应给 order（决定导航位置）')
 })
 
 // --- v0.3 GUI 面板 T5c：源码卫生——client 源与 lib 产物均不含字面 NUL 字节（plans/v0.3-gui-panel.md §4 T5，v0.3/AC-28c）---

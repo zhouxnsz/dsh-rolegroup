@@ -39,9 +39,13 @@ dsh 的**角色化委派插件**：角色 = 名字 + 绑定模型 + persona；�
 
 - **`lib/client.js` 是产物**：改 `src/client/**` 或 `lib/roles.js`（其内置表会被打包进客户端）后，
   必须 `npm run build:client`。esbuild **不压缩**，连注释都会进产物——"改了注释忘了重建"会让产物与源码不一致。
-- **`plugins.item` 槽位会渲染同一张卡片多次**：列表行与详情页描述区用 `view: "summary"`、
-  详情页配置区用 `view: "page"`。卡片**必须按 `props.view` 分流**（summary 只返回一行文案），
-  否则详情页会叠出多张完整卡片。
+- **面板注册在 `settings.section`（设置页的一节），不要改回 `plugins.item`**。2026-10-15 起如此，
+  原因：Plugins 页把**所有** `plugins.item` 卡片无条件追加进「官方」组，而本插件不是官方插件
+  （上游判据 `installed` = 在 profile `dependencies` 里、`optional` = 在硬编码 `OPTIONAL_BUNDLES` 里，
+  两条我们都不满足）→ 会被错误地标成"官方"。`settings.section` 需要 `label`（导航条目名）与 `order`。
+  *若将来真要往 `plugins.item` 注册*：那个槽位会对同一张卡片渲染多次（列表行与详情页描述区传
+  `view: "summary"`、详情页配置区传 `view: "page"`），组件**必须按 `props.view` 分流**，否则会叠卡片
+  —— `card.jsx` 里那一行 guard 就是为此保留的。
 - **接管判据必须是显式布尔位**：不能用"`roles` 数组是否为空"判断面板是否接管——schemastery 会把数组
   自动补成 `[]`，"字段缺省"与"显式空数组"在解析值上不可区分。
 - **`mergeRoles` 恒以内置表为底** → "零角色"不可表达；面板里的空覆盖表 = 不做任何覆盖 = 回到内置 7 角色。
@@ -55,8 +59,9 @@ dsh 的**角色化委派插件**：角色 = 名字 + 绑定模型 + persona；�
 - **命名空间 = loader 条目 id**（`dsh-rolegroup`）；schema = 该条目**静态导出**的 `Config`。
 - **只有 `meta.volatile` 字段可描述/可写**；`Config.roles` 是整数组 volatile。
 - **生效通知**走 `ctx.on('loader/volatile-update', …)`（旧的 `SettingsScope.watch` 已不存在）。
-- **客户端**经 `ctx.configForms.whileServed([ns], …)` 门控，往 `plugins.item` 槽注册卡片；
-  读写走 `ConfigFormController` 的 `getSnapshot` / `subscribe` / `mutate`。
+- **客户端**经 `ctx.configForms.whileServed([ns], …)` 门控，往 `settings.section` 槽注册设置页一节
+  （`label` = 导航名、`order` = 位置）；读写走 `ConfigFormController` 的
+  `getSnapshot` / `subscribe` / `mutate`。
 - **四层优先级**：settings 面板 > 项目 `rolegroup.jsonc` > 用户 `rolegroup.jsonc` > 内置表。
 
 ## 开发流程

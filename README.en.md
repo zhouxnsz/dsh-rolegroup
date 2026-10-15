@@ -145,9 +145,13 @@ live, read the "config source" line of `/rolegroup doctor`.
 
 ## 5. GUI panel
 
-Under **Settings → Plugins → `dsh-rolegroup`** you can edit role ↔ model routes visually: add/remove role
-rows, change provider/model, edit persona/summary, with 保存 / 放弃 / 重置为文件配置 (Save / Discard /
-Reset to file config) at the bottom.
+Under **Settings → 角色配置 (Role Routing)** you can edit role ↔ model routes visually: add/remove role rows,
+change provider/model, edit persona/summary, with 保存 / 放弃 / 重置为文件配置 (Save / Discard / Reset to
+file config) at the bottom.
+
+> It registers as a settings-page **section** (`settings.section`), a peer of "Models" and "Agent presets" —
+> because the role table is **feature-level configuration**, not plugin management. **It also does not appear
+> under the Plugins page's "Official" group** (reasons in §8).
 
 <!-- TODO(screenshot): panel screenshot pending — re-shoot, place at assets/rolegroup-panel.png, replace this line -->
 > 📷 *Panel screenshot pending* (`assets/rolegroup-panel.png`).
@@ -251,11 +255,14 @@ Verified against **dsh 0.2.0-rc.2**; `lib/` depends only on the **Config-schema 
 - **0.2.0-rc.2 re-check: runs unchanged** (all contract points alive, key packages byte-identical, real-host
   behaviour unchanged).
 
-> **On the Plugins-page grouping**: this plugin may show up under "**Official**" — that is upstream's grouping
-> rule, not a claim of official status. That group is "optional official bundles that are not installed" **plus
-> every plugin that registers a `plugins.item` config card**, so **any plugin with a config panel lands there**.
-> The "Installed" group is driven by the profile's dependency manifest, so a home-layer mount does not appear in
-> it (behaviour is unaffected; it is purely a grouping artefact).
+> **On the Plugins page**: the config panel lives in **Settings** (§5), so this plugin does **not** appear under
+> the Plugins page's "Official" group. Upstream decides with two flags: `installed` = the name is in the profile's
+> `dependencies`, and `optional` = the name is in dsh's hard-coded official optional-bundle list
+> (`OPTIONAL_BUNDLES`) — **this plugin satisfies neither**. The Plugins page appends **every** `plugins.item`
+> card to the "Official" group unconditionally, which is why it used to be shown there; dropping the card removes
+> that entirely (independently of the install method).
+> To have it appear under "**Installed**" in the Plugins page (with an enable/disable toggle) it must become a
+> profile dependency, i.e. be installed with the official plugin manager (see §2).
 
 ## 9. FAQ
 
