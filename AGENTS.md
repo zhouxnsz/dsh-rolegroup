@@ -34,6 +34,9 @@ dsh 的**角色化委派插件**：角色 = 名字 + 绑定模型 + persona；�
    `time` / `configSource` / `configError` / `configMtimeMs` / `registered` / `invalid` / `failed` / `problems`。
    **唯一例外**：v0.5 从 `registered[]` 移除了 `readonly`（该字段承载的语义已整体废弃，代码内已注明理由）；
    相应地 `doctor` 必须**容忍磁盘上的旧格式快照**——多余键一律忽略、不计异常。
+   （`configMtimeMs` 的口径澄清：它一贯的含义是「**生效**配置文件的 mtime」，即**生效来源就是那个
+   jsonc 文件**时才透出；面板接管/内置表为 null。写入侧 2026-10-15 起按此把关——原先接管时也照抄
+   被让位文件的 mtime，是写入侧缺陷，不是本键改语义。）
 
 ## 容易踩的坑（都真实发生过）
 
@@ -48,7 +51,11 @@ dsh 的**角色化委派插件**：角色 = 名字 + 绑定模型 + persona；�
   —— `card.jsx` 里那一行 guard 就是为此保留的。
 - **接管判据必须是显式布尔位**：不能用"`roles` 数组是否为空"判断面板是否接管——schemastery 会把数组
   自动补成 `[]`，"字段缺省"与"显式空数组"在解析值上不可区分。
-- **`mergeRoles` 恒以内置表为底** → "零角色"不可表达；面板里的空覆盖表 = 不做任何覆盖 = 回到内置 7 角色。
+- **层语义是「整层择一」，不是逐角色缝合**：jsonc 链「第一个命中即停」，面板 `enabled=true` 则**整层接管**——
+  `mergeRoles` 恒以内置表为底，所以接管后**只写在 jsonc 里、没搬进面板的角色会回落内置表**（jsonc 整层让位），
+  不是"沿用下层"。面板空覆盖表 = 不做任何覆盖 = 回到内置 7 角色，故「零角色」不可表达。
+  README §4/§5 已按此写死；**别再写成「未列出的照旧沿用下层」**（2026-10-15 实测：这句会让用户以为
+  jsonc 覆盖还在生效，而它已被整层让位）。
 - **`maxDepth` 配 `0` 会把顶层委派也挡掉**，不只是禁止套娃。
 - **配置不热生效**：快照只在启动剪枝终验时写一次；改配置需重启 + 开新会话。
 - **provider 未注册的角色会被剪枝**（不注册、只记进 `invalid[]`）。兜底角色尤其要留意：
@@ -62,7 +69,8 @@ dsh 的**角色化委派插件**：角色 = 名字 + 绑定模型 + persona；�
 - **客户端**经 `ctx.configForms.whileServed([ns], …)` 门控，往 `settings.section` 槽注册设置页一节
   （`label` = 导航名、`order` = 位置）；读写走 `ConfigFormController` 的
   `getSnapshot` / `subscribe` / `mutate`。
-- **四层优先级**：settings 面板 > 项目 `rolegroup.jsonc` > 用户 `rolegroup.jsonc` > 内置表。
+- **四层优先级**（**整层择一**，见「容易踩的坑」）：settings 面板 > 项目 `rolegroup.jsonc` >
+  用户 `rolegroup.jsonc` > 内置表。
 
 ## 开发流程
 

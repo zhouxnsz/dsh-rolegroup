@@ -1826,6 +1826,88 @@ await okAsync('compose recompose 的角色校验：新表中未注册 provider �
   }
 })
 
+// --- 2026-10-15：层语义（整层择一）的**可见性**锁定 + configMtimeMs 来源归因 ---
+// 背景（实测复现，两条都是"文档/诊断与实现错位"）：
+//   ① README §4 原写"未列出的角色照旧沿用下层"，读者会以为面板接管后 jsonc 覆盖仍在生效；
+//      实现是**整层择一**（接管 ⇒ jsonc 整层让位 ⇒ 未列出的角色回落内置表）。行为不改（既有断言
+//      已锁 v0.1 语义），改的是**把后果说出来**：日志必须点名被让位的文件与回落目标。
+//   ② 快照的 configMtimeMs 原先恒取 jsonc 文件 mtime，接管时也一样 → doctor 的「配置年龄提示」
+//      会把一个已被让位的文件的年龄算到 settings 面板头上。现按「生效来源就是该文件」把关。
+
+await okAsync('层语义可见性：接管时日志须点名被让位的 jsonc 与后果（"以为 jsonc 还在生效" 回归锁）', async () => {
+  const tmp = await mkdtemp(join(tmpdir(), 'dsh-rg-layer-msg-'))
+  const prevHome = process.env.DSH_HOME
+  process.env.DSH_HOME = tmp
+  __setTestOverrides({ debounceMs: 1, maxWaitMs: 5 })
+  try {
+    const configFile = join(tmp, 'rolegroup.jsonc')
+    await writeFile(configFile, JSON.stringify({ roles: { coder: { model: 'k3-jsonc' } } }))
+    const fake = makeComposeCtx()
+    await apply(fake.ctx, makeEntryConfig([
+      { toolName: 'scout', provider: 'deepseek-official', model: 'deepseek-flash' },
+    ], true).config)
+    // ① 行为判据：jsonc 的 coder 覆盖**不生效**（整层让位 → 回落内置 k3）
+    assert.equal(fake.calls.plugin.find((c) => c.toolName === 'coder').agentOptions.model, 'k3',
+      '接管后 jsonc 整层让位：未列进面板的 coder 必须回落内置表')
+    // ② 可见性判据：日志必须说全后果（只说"被覆盖"会让用户以为 jsonc 覆盖还在生效）
+    const line = fake.logs.info.find((m) => m.includes('整层让位'))
+    assert.ok(line, `必须有一条说明 jsonc 整层让位的 info 日志，实为：${JSON.stringify(fake.logs.info)}`)
+    assert.ok(line.includes(configFile), `日志须点名被让位的文件路径：${line}`)
+    assert.ok(line.includes('回落内置表'), `日志须点明未列出角色的去处：${line}`)
+  } finally {
+    __setTestOverrides(undefined)
+    if (prevHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = prevHome
+  }
+})
+
+await okAsync('configMtimeMs 归因：生效来源是 jsonc → 透出 mtime（年龄提示照出）；面板接管 → null（提示不出现）', async () => {
+  const tmp = await mkdtemp(join(tmpdir(), 'dsh-rg-mtime-src-'))
+  const prevHome = process.env.DSH_HOME
+  process.env.DSH_HOME = tmp
+  const DAY = 24 * 60 * 60 * 1000
+  const pinned = new Date('2026-01-05T00:00:00.000Z') // 远超 14 天阈值：若被透出必触发年龄提示
+  __setTestOverrides({ debounceMs: 1, maxWaitMs: 5 })
+  try {
+    const configFile = join(tmp, 'rolegroup.jsonc')
+    await writeFile(configFile, JSON.stringify({ roles: { coder: { model: 'k3-jsonc' } } }))
+    await utimes(configFile, pinned, pinned)
+
+    // ① 未接管（enabled=false）→ 生效来源就是该文件 → mtime 原样入快照，doctor 出 ⚠️ 年龄提示
+    // 超时参数只作「防挂死兜底」，不是固定等待：机器满载时 2000ms 曾偶发超时（2026-10-20 实测），故放宽。
+    const a = makeComposeCtx()
+    await apply(a.ctx, makeEntryConfig([], false).config)
+    const reportA = await waitForReport(reportPathOf(tmp), 8000)
+    assert.equal(reportA.configSource, configFile)
+    assert.equal(reportA.configMtimeMs, pinned.getTime(), '生效来源是 jsonc 时必须透出该文件 mtime')
+    const stateA = await readStartupReport({ env: { DSH_HOME: tmp }, now: new Date(pinned.getTime() + 30 * DAY) })
+    assert.equal(stateA.kind, 'ok')
+    assert.equal(stateA.anomalies.length, 1, JSON.stringify(stateA.anomalies))
+    assert.ok(stateA.anomalies[0].includes('30 天') && stateA.anomalies[0].includes(configFile),
+      `年龄提示须同源（source 与日期都来自该文件）：${stateA.anomalies[0]}`)
+
+    // ② 接管（enabled=true）→ jsonc 整层让位 → mtime 必须为 null，且年龄提示不得出现
+    const b = makeComposeCtx()
+    await apply(b.ctx, makeEntryConfig([], true).config)
+    // 同 ①：8000ms 只是防挂死兜底（readReportWhen 的缺省 2000ms 在满载时会偶发超时）
+    await waitForCond(() => {
+      try {
+        return JSON.parse(readFileSync(reportPathOf(tmp), 'utf8')).configSource?.includes?.('settings') === true
+      } catch { return false }
+    }, 'last-startup.json 标记 settings 来源', 8000)
+    const reportB = JSON.parse(readFileSync(reportPathOf(tmp), 'utf8'))
+    assert.ok(reportB.configSource.includes('settings'), reportB.configSource)
+    assert.equal(reportB.configMtimeMs, null, '接管后生效来源不是 jsonc 文件 → configMtimeMs 必须为 null')
+    const stateB = await readStartupReport({ env: { DSH_HOME: tmp }, now: new Date(pinned.getTime() + 30 * DAY) })
+    assert.deepEqual(stateB.anomalies, [],
+      `接管后不得出现「配置超龄」⚠️（不许把被让位文件的年龄算到面板头上）：${JSON.stringify(stateB.anomalies)}`)
+  } finally {
+    __setTestOverrides(undefined)
+    if (prevHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = prevHome
+  }
+})
+
 // --- T3：client 构建管线（plans/v0.3-gui-panel.md §4 T3，v0.3/AC-17..AC-19）---
 await okAsync('build-client: 产物形状与官方 wrapper 同构——首行 load 调用 / id / 尾两行 / 全文无顶层 import/export（v0.3/AC-17）', async () => {
   const { execFileSync } = await import('node:child_process')
@@ -2234,6 +2316,22 @@ await okAsync('client-card: 未接管时必须给出说明（"没有默认角色
   assert.ok(zh.notTakeover && en.notTakeover, 'notTakeover 词条 zh/en 必须都有')
 })
 
+await okAsync('client-card: **已**接管时也必须给出说明——jsonc 整层让位（"以为 jsonc 还在生效" 困惑回归锁）', async () => {
+  // 2026-10-15：接管后原先什么都不显示，而用户很容易以为"我只改了 scout，coder 的 jsonc 覆盖还在"
+  // ——实际上 jsonc 整层让位、coder 回落内置表。两个分支都必须把层语义说清。
+  const card = readFileSync(fileURLToPath(new URL('../src/client/card.jsx', import.meta.url)), 'utf8')
+  assert.ok(card.includes('takeoverNote'), 'card.jsx 必须在已接管时渲染 takeoverNote 说明')
+  assert.ok(/state\.takeover\s*\?/.test(card), 'takeoverNote 必须挂在 state.takeover 分支上')
+  const { zh, en } = await import(new URL('../src/client/locales.js', import.meta.url))
+  for (const [name, dict] of [['zh', zh], ['en', en]]) {
+    assert.ok(typeof dict.takeoverNote === 'string' && dict.takeoverNote !== '', `${name}.takeoverNote 必须存在且非空`)
+  }
+  assert.ok(zh.takeoverNote.includes('整层让位') && zh.notTakeover.includes('整层'),
+    '中文词典两个分支都必须说清「整层」语义')
+  assert.ok(/yields entirely/i.test(en.takeoverNote) && /yields entirely/i.test(en.notTakeover),
+    '英文词典两个分支都必须说清 all-or-nothing（yields entirely）语义')
+})
+
 ok('client-card: card.jsx 全文无硬编码 CJK——所有文案走 t()（v0.3/AC-28）', () => {
   const card = readFileSync(fileURLToPath(new URL('../src/client/card.jsx', import.meta.url)), 'utf8')
   const hits = card.match(/[一-鿿]/g)
@@ -2298,7 +2396,7 @@ await okAsync('client-index 门控时序：未 serve 不注册、serve 后 slots
   assert.deepEqual(calls.whileServed[0][0], ['dsh-rolegroup'])
   assert.equal(calls.slotsInject.length, 0, 'host 未 serve 命名空间时不得注册卡片（whileServed 门控）')
   assert.equal(calls.slotsRegister.length, 0)
-  // ③ 模拟 host 开始 serve → 触发 register 回调 → slots.inject 恰 1 次，参数为 plugins.item + AsyncFunction
+  // ③ 模拟 host 开始 serve → 触发 register 回调 → slots.inject 恰 1 次，参数为 settings.section + AsyncFunction
   const registerFn = calls.whileServed[0][1]
   registerFn(new Set(['dsh-rolegroup']))
   assert.equal(calls.slotsInject.length, 1, 'serve 后 slots.inject 须恰好调用 1 次')

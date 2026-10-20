@@ -200,7 +200,12 @@ export function RolegroupCard(props) {
         </div>
       ) : null}
       {state.catalog.partial ? <p className="dsh-rg-notice">{t('catalogPartial')}</p> : null}
-      {state.takeover ? null : (
+      {state.takeover ? (
+        // Taken over: state the LAYER semantics explicitly — the effective table is this override
+        // table with the BUILT-IN table filling the gaps; rolegroup.jsonc yields entirely. Saying
+        // only "the file table is overridden" makes users think unlisted roles still keep jsonc.
+        <p className="dsh-rg-notice" role="status">{t('takeoverNote')}</p>
+      ) : (
         // Not taken over yet: the table below is an EMPTY OVERRIDE table, not "no roles".
         // The effective table comes from rolegroup.jsonc / the built-in table, and any role
         // not listed here keeps using them.

@@ -58,7 +58,9 @@ YAML
 > **Pick one; do not use both.** The trade-off:
 > - **home layer (the one above, recommended)**: not a profile dependency → **it cannot be wiped by a profile
 >   rewrite** (a third-party market rewriting the profile once silently dropped local plugins this way). The cost:
->   the Plugins page only shows it inside the "Official" group, with no enable/disable toggle.
+>   **it does not show up under "Installed" in the Plugins page and has no enable/disable toggle** (that group is
+>   keyed on "the name is a profile dependency" — see §8). It does **not** show up in the "Official" group either:
+>   both sources of that group are unrelated to this plugin (§8), **regardless of how you install it**.
 > - **official manager**: the standard path, visible and switchable in the UI; the cost is going back into the
 >   container that profile rewrites touch.
 > - Using both **will not break** (the loader dedupes by id and mounts once), but you get a mismatch: the UI says
@@ -119,9 +121,23 @@ holds initial values rather than verdicts — **your effective bindings are what
 
 The only role fields are **`toolName` / `provider` / `model` / `reasoningEffort?` / `persona` / `summary`**.
 
-### Precedence with the GUI panel (four layers)
+### Precedence with the GUI panel (four layers, **the highest present layer wins outright**)
 
 **this panel (settings layer) > project `rolegroup.jsonc` > user `rolegroup.jsonc` > built-in table**
+
+⚠️ **This is layer *selection*, not per-role stitching**: once a layer is in effect, every layer below it
+**yields entirely** — the jsonc chain itself behaves the same way (a project file means the user file is not
+read at all). The final table = **the winning layer + the built-in table filling the gaps** (`mergeRoles`
+always seeds the built-in table; semantics held since v0.1).
+
+**The consequence that bites**: saving in the panel = taking over the effective table ⇒ **`rolegroup.jsonc`
+yields entirely**. A role that only exists in jsonc and was not moved into the panel **falls back to the
+built-in table** — it does **not** "keep using jsonc". Therefore:
+
+- **use jsonc or use the panel, not both**;
+- if you already have jsonc overrides and want to tweak a few roles in the panel, **add the jsonc rows you
+  want to keep to the panel as well before saving**;
+- the way out of takeover is the panel's "Reset to file config" (it clears the `enabled` + `roles` fields).
 
 Whether the panel is in effect is controlled by an **explicit boolean** (§5). To see which layer is really
 live, read the "config source" line of `/rolegroup doctor`.
@@ -163,11 +179,12 @@ file config) at the bottom.
    **truly exits takeover**. Because the panel's "composition layer" can only come from the entry's `config:`, it
    **cannot prefill the runtime-read jsonc file table** → the **panel starts empty** (meaning "not taken over yet",
    with the effective table still coming from jsonc / the built-in table). *An empty list does not mean there are no
-   roles*: add rows only for **the roles you want to change**; anything unlisted keeps inheriting the lower layers.
-   See §6 for the full effective table.
+   roles*: add rows only for **the roles you want to change** — but **saving takes over the whole layer** (§4), so
+   anything unlisted falls back to the **built-in** table and jsonc yields entirely. See §6 for the full effective table.
 2. **"Zero roles" is not expressible** — `mergeRoles` always seeds the built-in table (semantics held since
    v0.1), so an empty override table in the panel means "no overrides" = back to the built-in 7, not "mount
-   nothing". To disable the plugin entirely, remove its insert row from the home layer.
+   nothing" (**jsonc does not participate while taken over**). To disable the plugin entirely, remove its insert
+   row from the home layer.
 
 Saving takes effect after a **restart + new session**.
 
@@ -217,7 +234,9 @@ Behaviour notes:
   ⚠️ — but **the table is always printed**; it never refuses to work;
 - **Config-age notice**: an effective config untouched for over 14 days gets a ⚠️ (with day count and last change
   date), prompting a review of "that temporary override I put on top"; it uses the notice channel and is **not
-  counted as an anomaly**;
+  counted as an anomaly**; ⚠️ this notice **only applies to jsonc-file sources** — the settings layer written by the
+  panel carries no timestamp, so while the panel is in takeover no such notice is produced (and the age of a
+  yielded jsonc file is never passed off as the panel's);
 - When the llm service is unavailable the whole availability column reads `➖` (never a false ✅); the snapshot is
   written once, during startup finalisation, so config changes appear only after a restart / new session.
 
@@ -254,7 +273,7 @@ Layout:
 ## 8. Compatibility
 
 Verified against **dsh 0.2.0-rc.2**; `lib/` depends only on the **Config-schema settings model** introduced in
-0.1.7 (entry `Config` + `.volatile()` → namespace; client `configForms` + `plugins.item`).
+0.1.7 (entry `Config` + `.volatile()` → namespace; client `configForms` + `settings.section`).
 
 - Usable from **0.1.7-rc.2** onward; before 0.1.7 the `settings.register` / `SettingsScope` /
   `settings.plugin.item` / `settings.yaml` APIs were removed upstream, which invalidated the v0.3 panel and
@@ -284,7 +303,9 @@ takeover; the effective table comes from `rolegroup.jsonc` / the built-in table.
 want to change** and Save (see §5, trade-off ①).
 
 **I edited `rolegroup.jsonc` and nothing changed?**
-Config is not hot-applied — **restart + open a new session**.
+First check whether the **panel has taken over** (§4: with `enabled=true` jsonc **yields entirely**, so a reload
+changes nothing) — click "Reset to file config" in the panel to exit takeover. Otherwise it is just that config is
+not hot-applied: **restart + open a new session**.
 
 **`/rolegroup` does nothing?**
 **Pasting** text starting with `/` into the GUI composer sends it as an ordinary message — type it by hand or pick

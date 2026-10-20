@@ -30,7 +30,13 @@ export const zh = {
   scopeUnavailable: 'rolegroup 设置命名空间不可用（宿主未注册或不可写），面板暂不可编辑',
   notTakeover: '本面板尚未接管：当前生效的是 rolegroup.jsonc / 内置表，未在下面列出的角色一律沿用它们。'
     + '空白 ≠ 没有角色——点「新增角色」加一行（只需加你想改的那些）并「保存」后，由本面板接管；'
+    // ⚠️ 这里是 UI 文案（React 按**纯文本**渲染，不解析 markdown）——强调只能用「」，
+    // 写 **xxx** 会被原样显示成星号（2026-10-20 真机截图发现）。
+    + '注意接管是「整层」的：rolegroup.jsonc 随后整层让位，只写在 jsonc 里的角色会回落内置表，'
+    + '故请把想保留的 jsonc 行一并加进来。'
     + '「重置为文件配置」可退出接管。完整生效表见 /rolegroup doctor。',
+  takeoverNote: '本面板已接管：生效表 = 本表 + 内置表补底；rolegroup.jsonc 整层让位'
+    + '（未列出的角色回落内置表，不会沿用 jsonc）。完整生效表见 /rolegroup doctor。',
 }
 
 export const en = {
@@ -61,7 +67,12 @@ export const en = {
   scopeUnavailable: 'The rolegroup settings namespace is unavailable (not served by the host or not writable); editing is disabled',
   notTakeover: 'This panel has not taken over yet: the effective table comes from rolegroup.jsonc / the built-in table, '
     + 'and any role not listed below keeps using them. An empty list does not mean "no roles" — add a row (only for the roles you '
-    + 'want to change) and Save to take over; Reset to file config exits takeover. See /rolegroup doctor for the full table.',
+    + 'want to change) and Save to take over; Reset to file config exits takeover. Note that takeover is all-or-nothing: '
+    + 'rolegroup.jsonc then yields entirely, so roles you only defined in jsonc fall back to the built-in table — '
+    + 'add the jsonc rows you want to keep here as well. See /rolegroup doctor for the full table.',
+  takeoverNote: 'This panel has taken over: the effective table is this table with the built-in table filling the gaps; '
+    + 'rolegroup.jsonc yields entirely (roles not listed here fall back to the built-in table, not to jsonc). '
+    + 'See /rolegroup doctor for the full table.',
 }
 
 export default { zh, en }
