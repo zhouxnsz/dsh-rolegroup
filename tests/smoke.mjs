@@ -1127,13 +1127,17 @@ await okAsync('apply 接线：ctx.on 抛错 → warn 降级不抛；正常 → �
       thrown.logs.warn.some((m) => m.includes('事件不可订阅')),
       'ctx.on 抛错时必须 warn 降级（现状为静默 catch），而不是吞掉',
     )
-    thrown.calls.effectCleanups.forEach((fn) => fn()) // 取消 pending 定时器，防串用例
+    thrown.calls.effectCleanups.filter((fn) => typeof fn === 'function').forEach((fn) => fn()) // 取消 pending 定时器/回收角色，防串用例
 
     const normal = makeFakeCtx()
     await assert.doesNotReject(apply(normal.ctx))
     assert.ok(normal.calls.on.some((c) => c.event === 'llm/adapters-updated'), '必须订阅 llm/adapters-updated 回调')
-    assert.equal(normal.calls.effectCleanups.length, 1, 'ctx.effect 必须注册一个清理函数')
-    assert.doesNotThrow(() => normal.calls.effectCleanups[0]()) // 触发清理（scheduler.cancel）不抛、无 unhandled rejection
+    // v0.6：apply 注册两条 effect——① early dispose roles（preset+fiber，D9 幂等回收）② scheduler cancel。
+    assert.equal(normal.calls.effectCleanups.length, 2, 'ctx.effect 必须注册两条清理函数（角色回收 + 调度器）')
+    for (const cleanup of normal.calls.effectCleanups) {
+      if (typeof cleanup !== 'function') continue
+      assert.doesNotThrow(() => cleanup()) // 触发清理不抛、无 unhandled rejection
+    }
   } finally {
     if (prevHome === undefined) delete process.env.DSH_HOME
     else process.env.DSH_HOME = prevHome
@@ -1583,23 +1587,27 @@ function makeBasePresetEntry(rows = fakeBaseRows(), id = 'standard') {
  * 复刻 @deepseek-ai/dsh-agent-preset-registry 的可观测语义（见本节头注①–⑤）。
  * @param {{ brokenIds?: Set<string>, listGate?: Promise<void> }} [opts]
  */
-function makeFakeAgentPresets({ brokenIds = new Set(), listGate } = {}) {
+function makeFakeAgentPresets({ brokenIds = new Set(), listGate, trace } = {}) {
   const calls = []
   const definitions = new Map()
   let gate = listGate
+  const record = (event, id) => {
+    calls.push([event, id])
+    trace?.push([event, id]) // 与 makeComposeCtx 共享同一数组 → 可断跨 helper 的先后顺序
+  }
   const service = {
     defaultId: 'standard',
     async register(definition) {
-      calls.push(['register', definition.id])
+      record('register', definition.id)
       if (definitions.has(definition.id)) throw new Error(`Duplicate agent preset: ${definition.id}`)
       definitions.set(definition.id, {
         id: definition.id,
         ...(brokenIds.has(definition.id) ? { broken: '模拟的 preset 激活失败' } : {}),
       })
-      return async () => { calls.push(['dispose', definition.id]); definitions.delete(definition.id) }
+      return async () => { record('preset-dispose', definition.id); definitions.delete(definition.id) }
     },
     async list() {
-      calls.push(['list'])
+      record('list')
       if (gate !== undefined) await gate
       return [...definitions.values()].map((record) => ({
         id: record.id,
@@ -1647,7 +1655,7 @@ await okAsync('v0.6 假宿主自测：register 幂等/重复 id 抛/list 形状/
   assert.equal(fake.definitions.has('rolegroup-good'), false, 'dispose 后定义必须消失')
   // 失败的重复注册尝试也记账（更贴近真实：调用发生了、但抛了）
   assert.deepEqual(fake.calls.filter((c) => c[0] === 'register').map((c) => c[1]), ['rolegroup-good', 'rolegroup-good', 'rolegroup-bad'])
-  assert.deepEqual(fake.calls.filter((c) => c[0] === 'dispose').map((c) => c[1]), ['rolegroup-good'])
+  assert.deepEqual(fake.calls.filter((c) => c[0] === 'preset-dispose').map((c) => c[1]), ['rolegroup-good'])
 })
 
 await okAsync('v0.6 假宿主自测：loader 默认 preset 声明可取到 rows（plans/v0.6 §13 T3）', async () => {
@@ -1667,9 +1675,10 @@ function makeComposeCtx({
   agentPresets = makeFakeAgentPresets().service, // v0.6 默认契约就绪；契约缺席路径显式传 null
   loader = makeContractLoader(),
   injectImpl, // v0.6：契约时序用例可注入 inject 行为（缺省 noop = 永不回调）
+  trace, // v0.6：与 makeFakeAgentPresets 共享的时序记录（断言 preset/fiber 的先后顺序）
 } = {}) {
   const logs = { info: [], warn: [], error: [] }
-  const calls = { plugin: [], disposes: [], announcements: [] }
+  const calls = { plugin: [], disposes: [], announcements: [], effectCleanups: [] }
   const handlers = new Map()
   const ctx = {
     logger: { info: (m) => logs.info.push(m), warn: (m) => logs.warn.push(m), error: (m) => logs.error.push(m) },
@@ -1680,14 +1689,15 @@ function makeComposeCtx({
     })[n],
     plugin: async (mod, cfg) => { // 桩 fiber：记录注册配置，dispose 记账（AC-12/15 断言面）
       calls.plugin.push(cfg)
-      return { dispose: async () => { calls.disposes.push(cfg) } }
+      trace?.push(['fiber-register', cfg.toolName])
+      return { dispose: async () => { calls.disposes.push(cfg); trace?.push(['fiber-dispose', cfg.toolName]) } }
     },
     systemPrompt: { section: (opts) => { calls.announcements.push(opts.text); return () => {} } },
     on: (event, handler) => {
       if (!handlers.has(event)) handlers.set(event, [])
       handlers.get(event).push(handler)
     },
-    effect: (fn) => fn(),
+    effect: (fn) => { const cleanup = fn(); calls.effectCleanups.push(cleanup); return cleanup },
     inject: injectImpl ?? (() => {}), // v0.4 起不再用 settings 软接入；v0.6 用 inject 等 agentPresets
   }
   /** 触发一次 cordis volatile 配置提交（面板保存 → configEditor 写 profile patch → loader 提交）。 */
@@ -2131,6 +2141,165 @@ await okAsync('v0.6 契约自检：无 agentPresets 服务 → warn + 角色全 
       fake.logs.warn.some((m) => m.includes('0.2.1') && m.includes('agentPresets')),
       `必须有一条明确的 0.2.1 契约警告，实为：${JSON.stringify(fake.logs.warn)}`,
     )
+  } finally {
+    __setTestOverrides(undefined)
+    if (prevHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = prevHome
+  }
+})
+
+// --- v0.6 T5：注册链（preset→fiber）、原子回滚、early effect 回收、重载幂等 ---
+await okAsync('v0.6 注册链：预设先于 fiber 注册、cfg 携带正确 presetId（v0.6/A3/A4）', async () => {
+  const tmp = await mkdtemp(join(tmpdir(), 'dsh-rg-v6-register-'))
+  const prevHome = process.env.DSH_HOME
+  process.env.DSH_HOME = tmp
+  __setTestOverrides({ debounceMs: 1, maxWaitMs: 5 })
+  try {
+    const trace = []
+    const presets = makeFakeAgentPresets({ trace })
+    const fake = makeComposeCtx({ agentPresets: presets.service, loader: makeContractLoader(), trace })
+    await apply(fake.ctx, { debounceMs: 1, maxWaitMs: 5 })
+    const report = await waitForReport(reportPathOf(tmp), 8000)
+    assert.equal(report.registered.length, 7)
+    // ① 顺序：每个角色都必须「先 register preset，再 ctx.plugin」
+    const events = trace.filter((e) => e[0] === 'register' || e[0] === 'fiber-register')
+    assert.deepEqual(events.map((e) => e[0]), Array.from({ length: 7 }, () => ['register', 'fiber-register']).flat())
+    // ② preset id 按生效表顺序，一角色一个
+    assert.deepEqual(
+      trace.filter((e) => e[0] === 'register').map((e) => e[1]),
+      Object.keys(DEFAULT_ROLES).map((n) => `rolegroup-${n}`),
+    )
+    // ③ cfg 里 presetId 成对且正确
+    for (const cfg of fake.calls.plugin) {
+      assert.equal(cfg.agentPreset, `rolegroup-${cfg.toolName}`)
+      assert.deepEqual(cfg.allowedAgentPresets, [`rolegroup-${cfg.toolName}`])
+    }
+  } finally {
+    __setTestOverrides(undefined)
+    if (prevHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = prevHome
+  }
+})
+
+await okAsync('v0.6 原子回滚：fiber 注册抛 → 该 preset 被 dispose，其余角色不受影响（v0.6/A5）', async () => {
+  const tmp = await mkdtemp(join(tmpdir(), 'dsh-rg-v6-rollback-'))
+  const prevHome = process.env.DSH_HOME
+  process.env.DSH_HOME = tmp
+  __setTestOverrides({ debounceMs: 1, maxWaitMs: 5 })
+  try {
+    const presets = makeFakeAgentPresets()
+    const fake = makeComposeCtx({ agentPresets: presets.service, loader: makeContractLoader() })
+    const realPlugin = fake.ctx.plugin
+    let thrown = false
+    fake.ctx.plugin = async (mod, cfg) => {
+      if (cfg.toolName === 'planner' && !thrown) { thrown = true; throw new Error('模拟 fiber 失败') }
+      return realPlugin(mod, cfg)
+    }
+    await apply(fake.ctx, { debounceMs: 1, maxWaitMs: 5 })
+    const report = await waitForReport(reportPathOf(tmp), 8000)
+    assert.deepEqual(report.failed, ['planner'])
+    assert.equal(report.registered.length, 6)
+    assert.deepEqual(
+      presets.calls.filter((c) => c[0] === 'preset-dispose').map((c) => c[1]),
+      ['rolegroup-planner'],
+      '失败角色的 preset 必须被回滚回收',
+    )
+    assert.equal(presets.definitions.has('rolegroup-planner'), false)
+    assert.equal(presets.definitions.size, 6, '其余 6 个 preset 仍在')
+  } finally {
+    __setTestOverrides(undefined)
+    if (prevHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = prevHome
+  }
+})
+
+await okAsync('v0.6 回收顺序：重组装时先 fiber 后 preset，一一对应（v0.6/A8）', async () => {
+  const tmp = await mkdtemp(join(tmpdir(), 'dsh-rg-v6-recycle-'))
+  const prevHome = process.env.DSH_HOME
+  process.env.DSH_HOME = tmp
+  const timers = makeFakeTimers()
+  __setTestOverrides({
+    debounceMs: 3000, maxWaitMs: 10000,
+    setTimeoutFn: timers.setTimeoutFn, clearTimeoutFn: timers.clearTimeoutFn, watchDebounceMs: 300,
+  })
+  try {
+    const trace = []
+    const presets = makeFakeAgentPresets({ trace })
+    const entry = makeEntryConfig([], false)
+    const fake = makeComposeCtx({ agentPresets: presets.service, loader: makeContractLoader(), trace })
+    await apply(fake.ctx, entry.config)
+    timers.advance(3000)
+    await waitForReport(reportPathOf(tmp), 8000)
+    // 触发重组装（面板保存 → volatile → recompose）
+    entry.setEnabled(true)
+    entry.setRoles([{ toolName: 'coder', provider: 'kimi-coding', model: 'k3' }])
+    fake.fireVolatile()
+    timers.advance(300)
+    // mergeRoles 恒以内置表为底：面板新增一行也只覆盖，生效表仍是 7 个角色 → 重组装是 7→7
+    await waitForCond(() => presets.calls.filter((c) => c[0] === 'register').length === 14, '重组装完成（7+7）', 8000)
+    const idxOf = (event, id) => trace.findIndex((e) => e[0] === event && e[1] === id)
+    for (const name of Object.keys(DEFAULT_ROLES)) {
+      const fiberIdx = idxOf('fiber-dispose', name)
+      const presetIdx = idxOf('preset-dispose', `rolegroup-${name}`)
+      assert.ok(fiberIdx >= 0, `${name} 的 fiber 必须被 dispose`)
+      assert.ok(presetIdx >= 0, `${name} 的 preset 必须被 dispose`)
+      assert.ok(fiberIdx < presetIdx, `${name} 必须先 fiber 后 preset（实际 ${fiberIdx} vs ${presetIdx}）`)
+    }
+  } finally {
+    __setTestOverrides(undefined)
+    if (prevHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = prevHome
+  }
+})
+
+await okAsync('v0.6 early effect：apply 开头注册回收 effect，清理时 dispose 全部 fiber+preset（v0.6/A10）', async () => {
+  const tmp = await mkdtemp(join(tmpdir(), 'dsh-rg-v6-teardown-'))
+  const prevHome = process.env.DSH_HOME
+  process.env.DSH_HOME = tmp
+  __setTestOverrides({ debounceMs: 1, maxWaitMs: 5 })
+  try {
+    const presets = makeFakeAgentPresets()
+    const fake = makeComposeCtx({ agentPresets: presets.service, loader: makeContractLoader() })
+    await apply(fake.ctx, { debounceMs: 1, maxWaitMs: 5 })
+    await waitForReport(reportPathOf(tmp), 8000)
+    assert.equal(presets.definitions.size, 7)
+    const disposers = fake.calls.effectCleanups.filter((fn) => typeof fn === 'function')
+    assert.ok(disposers.length >= 1, 'early effect 必须提供清理函数')
+    await Promise.all(disposers.map((fn) => fn()))
+    assert.equal(presets.definitions.size, 0, '卸载后不得有孤儿 preset')
+    assert.equal(fake.calls.disposes.length, 7, '7 个 fiber 都必须 dispose')
+  } finally {
+    __setTestOverrides(undefined)
+    if (prevHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = prevHome
+  }
+})
+
+await okAsync('v0.6 重载幂等：同一 registry 上二次 apply 不撞重复 id（v0.6/A19）', async () => {
+  const tmp = await mkdtemp(join(tmpdir(), 'dsh-rg-v6-reload-'))
+  const prevHome = process.env.DSH_HOME
+  process.env.DSH_HOME = tmp
+  __setTestOverrides({ debounceMs: 1, maxWaitMs: 5 })
+  try {
+    const presets = makeFakeAgentPresets()
+    const fake = makeComposeCtx({ agentPresets: presets.service, loader: makeContractLoader() })
+    await apply(fake.ctx, { debounceMs: 1, maxWaitMs: 5 })
+    await waitForReport(reportPathOf(tmp), 8000)
+    // 模拟插件卸载：调用全部清理函数
+    await Promise.all(fake.calls.effectCleanups.filter((fn) => typeof fn === 'function').map((fn) => fn()))
+    assert.equal(presets.definitions.size, 0)
+    // 二次 apply（同 registry 实例）
+    await apply(fake.ctx, { debounceMs: 1, maxWaitMs: 5 })
+    await waitForCond(
+      () => presets.calls.filter((c) => c[0] === 'register').length === 14,
+      '二次 apply 注册 7 个 preset',
+      8000,
+    )
+    assert.ok(
+      !fake.logs.error.some((m) => m.includes('Duplicate agent preset')),
+      `不得出现重复 id 错误：${JSON.stringify(fake.logs.error)}`,
+    )
+    assert.equal(presets.definitions.size, 7)
   } finally {
     __setTestOverrides(undefined)
     if (prevHome === undefined) delete process.env.DSH_HOME
