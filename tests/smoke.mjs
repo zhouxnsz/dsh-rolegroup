@@ -2473,6 +2473,47 @@ await okAsync('v0.6 基底取数失败：全 failed + actionable error、不抛�
   }
 })
 
+// --- v0.6 收口自审加固：契约缺席 + 热重组装时 fail-loud 不得丢失 ---
+await okAsync('v0.6 契约缺席时重组装：failed[] 仍须全量（fail-loud 不被清空）（v0.6/A12 补充）', async () => {
+  const tmp = await mkdtemp(join(tmpdir(), 'dsh-rg-v6-fail-loud-'))
+  const prevHome = process.env.DSH_HOME
+  process.env.DSH_HOME = tmp
+  const timers = makeFakeTimers()
+  __setTestOverrides({
+    debounceMs: 3000, maxWaitMs: 10000,
+    setTimeoutFn: timers.setTimeoutFn, clearTimeoutFn: timers.clearTimeoutFn,
+    watchDebounceMs: 300, presetsReadyTimeoutMs: 20,
+  })
+  try {
+    const fake = makeComposeCtx({
+      agentPresets: null, // 契约缺席（0.2.0 场景）
+      loader: makeContractLoader(),
+      injectImpl: (deps, cb) => { setTimeout(() => cb({ agentPresets: undefined }), 5) },
+    })
+    const entry = makeEntryConfig([], true)
+    await apply(fake.ctx, entry.config)
+    timers.advance(3000) // 首次终验
+    await readReportWhen(tmp, (r) => Array.isArray(r.failed) && r.failed.length === 7)
+    // 面板保存 → volatile 热重组装（此时契约仍缺席）
+    entry.setRoles([{ toolName: 'coder', provider: 'kimi-coding', model: 'k3' }])
+    fake.fireVolatile()
+    timers.advance(300)
+    // 等到第二次 finalize 的摘要日志（第 2 条「N 个角色…」）
+    await waitForCond(
+      () => fake.logs.info.concat(fake.logs.warn).filter((m) => m.includes('个角色')).length >= 2,
+      '热重组装后的 finalize 摘要',
+      8000,
+    )
+    const report = JSON.parse(readFileSync(reportPathOf(tmp), 'utf8'))
+    assert.deepEqual(report.registered, [], '契约缺席时不得注册角色')
+    assert.deepEqual(report.failed, Object.keys(DEFAULT_ROLES), '重组装后 failed[] 仍须全量（fail-loud 不被清空）')
+  } finally {
+    __setTestOverrides(undefined)
+    if (prevHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = prevHome
+  }
+})
+
 // --- T3：client 构建管线（plans/v0.3-gui-panel.md §4 T3，v0.3/AC-17..AC-19）---
 await okAsync('build-client: 产物形状与官方 wrapper 同构——首行 load 调用 / id / 尾两行 / 全文无顶层 import/export（v0.3/AC-17）', async () => {
   const { execFileSync } = await import('node:child_process')
