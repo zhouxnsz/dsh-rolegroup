@@ -261,7 +261,7 @@ Behaviour notes:
 
 ```sh
 npm install         # ★ required once after cloning: devDependency esbuild (client build)
-npm test            # offline smoke suite (108 pure-logic cases, ~0.3s; pretest runs link:deps)
+npm test            # offline smoke suite (111 pure-logic cases, ~0.6s; pretest runs link:deps)
 npm run link:deps   # ★ required once after cloning, and after a dsh upgrade / tree move
 npm run build:client  # after editing src/client/** or lib/roles.js: rebuild lib/client.js
 ```

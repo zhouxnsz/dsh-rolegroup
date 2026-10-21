@@ -2393,6 +2393,86 @@ await okAsync('v0.6 剪枝路径：provider 未注册被剪枝时，对应 prese
   }
 })
 
+// --- v0.6 T9：补齐 A7/A15/A16（重复 id 隔离 / 服务超时后到达 / 基底取数失败）---
+await okAsync('v0.6 重复 id：该角色 failed、其余照常注册（v0.6/A7）', async () => {
+  const tmp = await mkdtemp(join(tmpdir(), 'dsh-rg-v6-dup-'))
+  const prevHome = process.env.DSH_HOME
+  process.env.DSH_HOME = tmp
+  __setTestOverrides({ debounceMs: 1, maxWaitMs: 5 })
+  try {
+    const presets = makeFakeAgentPresets()
+    await presets.service.register({ id: 'rolegroup-planner', plugins: [] }) // 预置同 id 冲突
+    const fake = makeComposeCtx({ agentPresets: presets.service, loader: makeContractLoader() })
+    await apply(fake.ctx, { debounceMs: 1, maxWaitMs: 5 })
+    const report = await waitForReport(reportPathOf(tmp), 8000)
+    assert.deepEqual(report.failed, ['planner'], '只有冲突角色失败，其余不受影响')
+    assert.equal(report.registered.length, 6)
+    assert.ok(
+      fake.logs.error.some((m) => m.includes('planner') && m.includes('Duplicate agent preset')),
+      `日志须带 actionable 的重复 id 错误：${JSON.stringify(fake.logs.error)}`,
+    )
+  } finally {
+    __setTestOverrides(undefined)
+    if (prevHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = prevHome
+  }
+})
+
+await okAsync('v0.6 服务超时后才到达：不补注册 + 一条"超时后到达"warn（v0.6/A15）', async () => {
+  const tmp = await mkdtemp(join(tmpdir(), 'dsh-rg-v6-late-'))
+  const prevHome = process.env.DSH_HOME
+  process.env.DSH_HOME = tmp
+  try {
+    const fake = makeComposeCtx({
+      agentPresets: null,
+      loader: makeContractLoader(),
+      // 服务在超时（20ms）之后才到达：apply 必须已按“缺席”降级，只补 warn 不补注册
+      injectImpl: (deps, cb) => { setTimeout(() => cb({ agentPresets: makeFakeAgentPresets().service }), 60) },
+    })
+    await apply(fake.ctx, { debounceMs: 1, maxWaitMs: 5, presetsReadyTimeoutMs: 20 })
+    const report = await waitForReport(reportPathOf(tmp), 8000)
+    assert.equal(fake.calls.plugin.length, 0, '超时后到达不得补注册角色')
+    assert.deepEqual(report.failed, Object.keys(DEFAULT_ROLES))
+    await waitForCond(
+      () => fake.logs.warn.some((m) => m.includes('超时后到达')),
+      '超时后到达的 warn',
+      3000,
+    )
+  } finally {
+    if (prevHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = prevHome
+  }
+})
+
+await okAsync('v0.6 基底取数失败：全 failed + actionable error、不抛（v0.6/A16）', async () => {
+  const tmp = await mkdtemp(join(tmpdir(), 'dsh-rg-v6-nobase-'))
+  const prevHome = process.env.DSH_HOME
+  process.env.DSH_HOME = tmp
+  __setTestOverrides({ debounceMs: 1, maxWaitMs: 5 })
+  try {
+    // persona/tool-subagent 可解析，但 loader 里没有任何 preset 声明 → 基底取数失败
+    const loader = {
+      import: async (specifier) => (
+        specifier === '@deepseek-ai/dsh-tool-subagent' || specifier === '@deepseek-ai/dsh-persona' ? {} : undefined
+      ),
+      entries: () => [],
+    }
+    const fake = makeComposeCtx({ loader })
+    await apply(fake.ctx, { debounceMs: 1, maxWaitMs: 5 })
+    const report = await waitForReport(reportPathOf(tmp), 8000)
+    assert.equal(fake.calls.plugin.length, 0, '基底取数失败时不得注册角色')
+    assert.deepEqual(report.failed, Object.keys(DEFAULT_ROLES))
+    assert.ok(
+      fake.logs.error.some((m) => m.includes('无法读取') && m.includes('agent preset')),
+      `必须有 actionable error：${JSON.stringify(fake.logs.error)}`,
+    )
+  } finally {
+    __setTestOverrides(undefined)
+    if (prevHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = prevHome
+  }
+})
+
 // --- T3：client 构建管线（plans/v0.3-gui-panel.md §4 T3，v0.3/AC-17..AC-19）---
 await okAsync('build-client: 产物形状与官方 wrapper 同构——首行 load 调用 / id / 尾两行 / 全文无顶层 import/export（v0.3/AC-17）', async () => {
   const { execFileSync } = await import('node:child_process')

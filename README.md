@@ -225,7 +225,7 @@ fallback deepseek-official/deepseek-flash ✅       ✅
 
 ```sh
 npm install         # ★ 首次 clone 后必跑：devDependency esbuild（客户端构建需要）
-npm test            # 离线 smoke test（108 项纯逻辑，约 0.3s；pretest 会自动跑 link:deps）
+npm test            # 离线 smoke test（111 项纯逻辑，约 0.6s；pretest 会自动跑 link:deps）
 npm run link:deps   # ★ 首次 clone 后、以及 dsh 升级/换部署树后必跑：把部署树的 schemastery 软链进本仓库
 npm run build:client  # 改了 src/client/** 或 lib/roles.js 后：重建产物 lib/client.js
 ```
