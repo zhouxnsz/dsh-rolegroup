@@ -20,6 +20,16 @@ import {
   mergeRoles,
   roleAnnouncement,
 } from '../lib/roles.js'
+import {
+  DELEGATION_GROUP_ID,
+  PERSONA_PLUGIN,
+  PRESET_ID_PREFIX,
+  buildPresetDefinition,
+  buildRolePresetRows,
+  cloneEntryList,
+  presetDisplayName,
+  presetIdOf,
+} from '../lib/presets.js'
 
 let passed = 0
 function ok(label, fn) {
@@ -95,26 +105,91 @@ ok('mergeRoles: 根/roles 类型错误', () => {
   assert.equal(mergeRoles({ roles: [] }).problems.length, 1)
 })
 
-// --- buildInstanceConfig ---
-ok('buildInstanceConfig: 固定 agentOptions + maxDepth:1 + modelSelectionSettings:false', () => {
-  const { roles } = mergeRoles(undefined)
-  const analyst = roles.find((r) => r.toolName === 'analyst')
-  const config = buildInstanceConfig(analyst)
-  assert.equal(config.provider, 'spawn')
-  assert.equal(config.toolName, 'analyst')
-  assert.equal(config.modelSelectionSettings, false)
-  assert.equal(config.maxDepth, 1) // 顶层可委派、角色不可再委派（resolveChildDepth 语义实证）
-  assert.deepEqual(config.agentOptions, { provider: 'qwen-token-plan-cn', model: 'qwen3.8-max' })
-  assert.equal(config.toolFilter, undefined, 'v0.5 起任何角色都不再挂 toolFilter（readonly 已移除）')
-  assert.ok(config.persona.includes('analyst'))
+// --- v0.6 lib/presets.js：默认 preset 克隆 / persona 替换 / delegation 剔除（plans/v0.6 §13 T1）---
+// 背景：dsh 0.2.1 起 persona 只能由 Agent Preset 承载，而显式 preset 会**替换**父组合
+// （plans/v0.6 §1.2 P0），故角色 preset = 克隆 deployment 默认 preset 的完整 rows。
+class FakeJsExpr { constructor(code) { this.code = code } } // 模拟上游 JsExpr 实例（不可 JSON 深拷）
+
+const BASE_ROWS = [
+  { id: 'persona', name: PERSONA_PLUGIN, config: { prefix: '部署默认 persona', suffix: '' } },
+  { id: 'agent-instructions', name: '@deepseek-ai/dsh-agent-instructions', config: { maxBytes: 65536 } },
+  { id: 'tool-bash', name: '@deepseek-ai/dsh-tool-bash', disabled: new FakeJsExpr("process.platform === 'win32'") },
+  { id: DELEGATION_GROUP_ID, name: 'cordis:group', group: true, config: [{ id: 'tool-subagent', name: '@deepseek-ai/dsh-tool-subagent' }] },
+]
+const PRESET_ROLE = { toolName: 'analyst', persona: '你是 analyst。', summary: '需求澄清' }
+
+ok('presets: 命名口径（v0.6/A1）', () => {
+  assert.equal(PRESET_ID_PREFIX, 'rolegroup-')
+  assert.equal(PERSONA_PLUGIN, '@deepseek-ai/dsh-persona')
+  assert.equal(DELEGATION_GROUP_ID, 'delegation')
+  assert.equal(presetIdOf('analyst'), 'rolegroup-analyst')
+  assert.equal(presetDisplayName('analyst'), '角色：analyst')
 })
 
-ok('buildInstanceConfig: reasoningEffort 透传（且不挂 toolFilter）', () => {
+ok('presets: cloneEntryList —— 纯对象/数组深拷，JsExpr 实例按引用保留（v0.6/A1）', () => {
+  const expr = BASE_ROWS[2].disabled
+  const cloned = cloneEntryList(BASE_ROWS)
+  assert.notEqual(cloned, BASE_ROWS) // 顶层新数组
+  assert.notEqual(cloned[0].config, BASE_ROWS[0].config) // 纯对象深拷
+  assert.equal(cloned[2].disabled, expr) // 实例引用不变（关键：JSON 深拷会破坏它）
+  cloned[0].config.prefix = '改了'
+  assert.equal(BASE_ROWS[0].config.prefix, '部署默认 persona', '不得污染 baseRows')
+})
+
+ok('presets: buildRolePresetRows —— 替换 persona 前缀、剔除 delegation、其余原样（v0.6/A1）', () => {
+  const rows = buildRolePresetRows(BASE_ROWS, PRESET_ROLE)
+  assert.deepEqual(rows.map((r) => r.id), ['persona', 'agent-instructions', 'tool-bash'])
+  assert.equal(rows[0].config.prefix, '你是 analyst。')
+  assert.equal(rows[0].config.suffix, '', 'persona 行其余字段保留')
+  assert.equal(rows[1].config.maxBytes, 65536)
+  assert.equal(rows[2].disabled, BASE_ROWS[2].disabled, 'JsExpr 引用保留')
+  assert.equal(BASE_ROWS[0].config.prefix, '部署默认 persona', 'baseRows 不被修改')
+})
+
+ok('presets: baseRows 非法 / 缺 persona 行时兜底追加（v0.6/A1）', () => {
+  assert.throws(() => buildRolePresetRows(undefined, PRESET_ROLE), /base preset/)
+  assert.throws(() => buildRolePresetRows([], PRESET_ROLE), /base preset/)
+  const noPersona = buildRolePresetRows([{ id: 'tool-fs', name: '@deepseek-ai/dsh-tool-fs' }], PRESET_ROLE)
+  assert.deepEqual(noPersona[0], { id: 'persona', name: PERSONA_PLUGIN, config: { prefix: '你是 analyst。' } })
+})
+
+ok('presets: buildPresetDefinition 精确形状（v0.6/A1）', () => {
+  const def = buildPresetDefinition(BASE_ROWS, PRESET_ROLE, 3)
+  assert.equal(def.id, 'rolegroup-analyst')
+  assert.equal(def.name, '角色：analyst')
+  assert.equal(def.description, '需求澄清')
+  assert.equal(def.order, 203)
+  assert.deepEqual(def.plugins.map((r) => r.id), ['persona', 'agent-instructions', 'tool-bash'])
+})
+
+// --- buildInstanceConfig ---
+ok('buildInstanceConfig: dsh 0.2.1 形状 —— agentPreset 成对 + maxDepth:1 + 无 persona/backgroundMode（v0.6/A2）', () => {
+  const { roles } = mergeRoles(undefined)
+  const analyst = roles.find((r) => r.toolName === 'analyst')
+  const config = buildInstanceConfig(analyst, 'rolegroup-analyst')
+  assert.deepEqual(config, {
+    provider: 'spawn',
+    toolName: 'analyst',
+    modelSelectionSettings: false,
+    agentOptions: { provider: 'qwen-token-plan-cn', model: 'qwen3.8-max' },
+    agentPreset: 'rolegroup-analyst',
+    allowedAgentPresets: ['rolegroup-analyst'],
+    maxDepth: 1, // 顶层可委派、角色不可再委派（resolveChildDepth 语义实证）
+  })
+  // 0.2.1 契约：persona/toolFilter/backgroundMode 一律不得出现在实例配置里（出现即被上游 throw）
+  for (const forbidden of ['persona', 'toolFilter', 'backgroundMode']) {
+    assert.equal(Object.hasOwn(config, forbidden), false, `${forbidden} 不得出现在 0.2.1 实例配置中`)
+  }
+  assert.equal(Object.hasOwn(config.agentOptions, 'persona'), false)
+})
+
+ok('buildInstanceConfig: reasoningEffort 透传 + allowedAgentPresets 单元素（v0.6/A2）', () => {
   const { roles } = mergeRoles({ roles: { coder: { reasoningEffort: 'high' } } })
   const coder = roles.find((r) => r.toolName === 'coder')
-  const config = buildInstanceConfig(coder)
-  assert.equal(config.toolFilter, undefined)
-  assert.equal(config.agentOptions.reasoningEffort, 'high')
+  const config = buildInstanceConfig(coder, 'rolegroup-coder')
+  assert.deepEqual(config.agentOptions, { provider: 'kimi-coding', model: 'k3', reasoningEffort: 'high' })
+  assert.deepEqual(config.agentPreset, 'rolegroup-coder')
+  assert.deepEqual(config.allowedAgentPresets, ['rolegroup-coder'])
 })
 
 ok('所有内置角色名都是合法工具名且唯一', () => {
@@ -123,13 +198,16 @@ ok('所有内置角色名都是合法工具名且唯一', () => {
   for (const n of names) assert.ok(TOOL_NAME_RE.test(n), n)
 })
 
-ok('roleAnnouncement: 包含每个角色与模型', () => {
+ok('roleAnnouncement: 包含每个角色与模型 + 0.2.1 委派语义（v0.6/A14）', () => {
   const { roles } = mergeRoles(undefined)
   const text = roleAnnouncement(roles)
   for (const r of roles) {
     assert.ok(text.includes(`\`${r.toolName}\``), r.toolName)
     assert.ok(text.includes(`${r.provider}/${r.model}`), r.toolName)
   }
+  assert.ok(text.includes('不可再嵌套委派'), '必须保留"不可再嵌套委派"约定')
+  assert.ok(text.includes('立即返回'), '必须说明委派立即返回 subagent id')
+  assert.ok(text.includes('完成通知') || text.includes('完成时收到通知'), '必须说明完成通知语义')
 })
 
 console.log(`\n${passed} passed`)
@@ -1472,7 +1550,108 @@ await okAsync('config: Config 形状/字段口径/volatile 位置/接管判据�
 // + v0.4 生效通道（`loader/volatile-update` 事件的注册与触发）。
 // 桩 loader 与 AC-30 同款（bare import 必失败已实证；resolveToolSubagent 模块级缓存此时
 // 已被 AC-30 置为桩模块，本桩是双保险）。
-function makeComposeCtx({ llm } = {}) {
+// --- v0.6 假宿主：agentPresets 服务 + loader 里的默认 preset 声明（plans/v0.6 §13 T3）---
+// 严格复刻 registry 的五条真实语义，否则测试会变成"假绿"：
+//   ① register 是 async，返回 async disposer；
+//   ② 同 id 重复注册抛错；
+//   ③ 激活失败**不抛**，只把 broken 写进 list() 结果（真实 registry 的坑）；
+//   ④ list() 是 async；
+//   ⑤ dispose 后定义从 roster 消失。
+const FAKE_BASE_ROWS = [
+  { id: 'persona', name: '@deepseek-ai/dsh-persona', config: { prefix: '部署默认 persona' } },
+  { id: 'agent-instructions', name: '@deepseek-ai/dsh-agent-instructions' },
+  { id: 'tool-fs', name: '@deepseek-ai/dsh-tool-fs' },
+  { id: 'delegation', name: 'cordis:group', group: true, config: [{ id: 'tool-subagent', name: '@deepseek-ai/dsh-tool-subagent' }] },
+]
+
+function makeBasePresetEntry(rows = FAKE_BASE_ROWS, id = 'standard') {
+  return { options: { id: `preset-${id}`, name: '@deepseek-ai/dsh-agent-preset', config: { id, plugins: rows } } }
+}
+
+/**
+ * 复刻 @deepseek-ai/dsh-agent-preset-registry 的可观测语义（见本节头注①–⑤）。
+ * @param {{ brokenIds?: Set<string>, listGate?: Promise<void> }} [opts]
+ */
+function makeFakeAgentPresets({ brokenIds = new Set(), listGate } = {}) {
+  const calls = []
+  const definitions = new Map()
+  let gate = listGate
+  const service = {
+    defaultId: 'standard',
+    async register(definition) {
+      calls.push(['register', definition.id])
+      if (definitions.has(definition.id)) throw new Error(`Duplicate agent preset: ${definition.id}`)
+      definitions.set(definition.id, {
+        id: definition.id,
+        ...(brokenIds.has(definition.id) ? { broken: '模拟的 preset 激活失败' } : {}),
+      })
+      return async () => { calls.push(['dispose', definition.id]); definitions.delete(definition.id) }
+    },
+    async list() {
+      calls.push(['list'])
+      if (gate !== undefined) await gate
+      return [...definitions.values()].map((record) => ({
+        id: record.id,
+        ...(record.broken === undefined ? {} : { broken: record.broken }),
+      }))
+    },
+  }
+  return {
+    service,
+    calls,
+    definitions,
+    /** 让后续 list() 挂起，直到返回的 release() 被调用（死锁 oracle 用）。 */
+    holdList() {
+      let release
+      gate = new Promise((resolve) => { release = resolve })
+      return () => { gate = undefined; release?.() }
+    },
+  }
+}
+
+/** 假 loader：提供 tool-subagent / persona 的模块解析 + 默认 preset 声明。 */
+function makeContractLoader({ baseRows = FAKE_BASE_ROWS, agentPresetId = 'standard' } = {}) {
+  return {
+    import: async (specifier) => (
+      specifier === '@deepseek-ai/dsh-tool-subagent' || specifier === '@deepseek-ai/dsh-persona' ? {} : undefined
+    ),
+    entries: () => [makeBasePresetEntry(baseRows, agentPresetId)],
+  }
+}
+
+await okAsync('v0.6 假宿主自测：register 幂等/重复 id 抛/list 形状/dispose（plans/v0.6 §13 T3）', async () => {
+  const fake = makeFakeAgentPresets({ brokenIds: new Set(['rolegroup-bad']) })
+  assert.equal(fake.service.defaultId, 'standard')
+  const dispose = await fake.service.register({ id: 'rolegroup-good', plugins: [] })
+  assert.equal(typeof dispose, 'function', 'register 必须返回 disposer')
+  assert.equal(fake.definitions.has('rolegroup-good'), true, 'register 后定义必须在 roster 里')
+  await assert.rejects(() => fake.service.register({ id: 'rolegroup-good', plugins: [] }), /Duplicate/)
+  await fake.service.register({ id: 'rolegroup-bad', plugins: [] })
+  const roster = await fake.service.list()
+  assert.deepEqual(roster, [
+    { id: 'rolegroup-good' },
+    { id: 'rolegroup-bad', broken: '模拟的 preset 激活失败' },
+  ])
+  await dispose()
+  assert.equal(fake.definitions.has('rolegroup-good'), false, 'dispose 后定义必须消失')
+  // 失败的重复注册尝试也记账（更贴近真实：调用发生了、但抛了）
+  assert.deepEqual(fake.calls.filter((c) => c[0] === 'register').map((c) => c[1]), ['rolegroup-good', 'rolegroup-good', 'rolegroup-bad'])
+  assert.deepEqual(fake.calls.filter((c) => c[0] === 'dispose').map((c) => c[1]), ['rolegroup-good'])
+})
+
+await okAsync('v0.6 假宿主自测：loader 默认 preset 声明可取到 rows（plans/v0.6 §13 T3）', async () => {
+  const loader = makeContractLoader()
+  const entries = loader.entries()
+  assert.equal(entries.length, 1)
+  assert.equal(entries[0].options.name, '@deepseek-ai/dsh-agent-preset')
+  assert.equal(entries[0].options.config.id, 'standard')
+  assert.deepEqual(entries[0].options.config.plugins.map((r) => r.id), ['persona', 'agent-instructions', 'tool-fs', 'delegation'])
+  assert.deepEqual(await loader.import('@deepseek-ai/dsh-persona'), {})
+  assert.deepEqual(await loader.import('@deepseek-ai/dsh-tool-subagent'), {})
+  assert.equal(await loader.import('@deepseek-ai/unknown'), undefined)
+})
+
+function makeComposeCtx({ llm, agentPresets, loader } = {}) {
   const logs = { info: [], warn: [], error: [] }
   const calls = { plugin: [], disposes: [], announcements: [] }
   const handlers = new Map()
@@ -1480,7 +1659,8 @@ function makeComposeCtx({ llm } = {}) {
     logger: { info: (m) => logs.info.push(m), warn: (m) => logs.warn.push(m), error: (m) => logs.error.push(m) },
     get: (n) => ({
       llm,
-      loader: { import: async (specifier) => (specifier === '@deepseek-ai/dsh-tool-subagent' ? {} : undefined) },
+      agentPresets, // v0.6：注入假 registry（缺省 undefined = 契约自检不通过路径）
+      loader: loader ?? { import: async (specifier) => (specifier === '@deepseek-ai/dsh-tool-subagent' ? {} : undefined) },
     })[n],
     plugin: async (mod, cfg) => { // 桩 fiber：记录注册配置，dispose 记账（AC-12/15 断言面）
       calls.plugin.push(cfg)
@@ -1854,6 +2034,9 @@ await okAsync('层语义可见性：接管时日志须点名被让位的 jsonc �
     assert.ok(line, `必须有一条说明 jsonc 整层让位的 info 日志，实为：${JSON.stringify(fake.logs.info)}`)
     assert.ok(line.includes(configFile), `日志须点名被让位的文件路径：${line}`)
     assert.ok(line.includes('回落内置表'), `日志须点明未列出角色的去处：${line}`)
+    // ③ 隔离判据：必须等自己的终验落盘再走——否则 1ms 防抖的剪枝会拖到下一个用例
+    //    切了 DSH_HOME 之后才写报告，把别人的临时目录写脏（跨用例竞态，曾真实发生）。
+    await readReportWhen(tmp, (r) => typeof r.configSource === 'string' && r.configSource.includes('settings'))
   } finally {
     __setTestOverrides(undefined)
     if (prevHome === undefined) delete process.env.DSH_HOME
