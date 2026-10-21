@@ -1078,13 +1078,20 @@ ok('startup-scheduler: 模块红线：零 cordis / 零 process.env / Date.now �
 function makeFakeCtx({ services = {}, on, effect } = {}) {
   const logs = { info: [], warn: [], error: [] }
   const calls = { plugin: [], on: [], effectCleanups: [] }
+  // v0.6：默认注入 agentPresets + contract loader（缺省即可让 apply 走正常注册路径；
+  // 需要测契约缺席路径的用例显式传 undefined 覆盖）
+  const resolvedServices = {
+    agentPresets: makeFakeAgentPresets().service,
+    loader: makeContractLoader(),
+    ...services,
+  }
   const ctx = {
     logger: {
       info: (m) => logs.info.push(m),
       warn: (m) => logs.warn.push(m),
       error: (m) => logs.error.push(m),
     },
-    get: (n) => services[n],
+    get: (n) => resolvedServices[n],
     plugin: async (mod, cfg) => { // 桩 fiber：记录调用但不真加载 subagent 模块
       calls.plugin.push({ mod, cfg })
       return { dispose: async () => {} }
@@ -1151,7 +1158,7 @@ await okAsync('apply W3：终验路由校验抛错仍写报告（registered 全�
         // 缓存串扰说明：resolveToolSubagent 的 toolSubagent 是模块级变量，本用例成功后
         // 桩模块会被缓存并泄漏给后续用例（AC-31）——AC-31 自带同款桩 loader 且只断言
         // 本次快照字段，缓存串扰不影响其结论；本用例位于所有 apply 用例之尾，无前向污染。
-        loader: { import: async (specifier) => (specifier === '@deepseek-ai/dsh-tool-subagent' ? {} : undefined) },
+        loader: makeContractLoader(),
       },
     })
     await apply(fake.ctx, { debounceMs: 1, maxWaitMs: 5 })
@@ -1181,7 +1188,7 @@ await okAsync('apply 快照 configMtimeMs：utimes 钉死 mtime → 原样入快
   // 与 AC-30 同款桩 loader（bare import 必失败已实证）；注意 resolveToolSubagent 的模块级
   // 缓存此时已被 AC-30 置为桩模块，本用例的 loader 实际不会被再调用——结论只依赖本次
   // 快照字段（configMtimeMs/configSource），与注册是否走缓存无关，故串扰无害。
-  const loaderStub = { import: async (specifier) => (specifier === '@deepseek-ai/dsh-tool-subagent' ? {} : undefined) }
+  const loaderStub = makeContractLoader() // v0.6：需能解析 persona 模块 + 默认 preset 声明
   const prevHome = process.env.DSH_HOME
   const prevCwd = process.cwd()
   try {
@@ -1557,14 +1564,18 @@ await okAsync('config: Config 形状/字段口径/volatile 位置/接管判据�
 //   ③ 激活失败**不抛**，只把 broken 写进 list() 结果（真实 registry 的坑）；
 //   ④ list() 是 async；
 //   ⑤ dispose 后定义从 roster 消失。
-const FAKE_BASE_ROWS = [
-  { id: 'persona', name: '@deepseek-ai/dsh-persona', config: { prefix: '部署默认 persona' } },
-  { id: 'agent-instructions', name: '@deepseek-ai/dsh-agent-instructions' },
-  { id: 'tool-fs', name: '@deepseek-ai/dsh-tool-fs' },
-  { id: 'delegation', name: 'cordis:group', group: true, config: [{ id: 'tool-subagent', name: '@deepseek-ai/dsh-tool-subagent' }] },
-]
+// 用工厂而非 const：makeFakeCtx（定义在本节之前）在模块求值期就会调用 makeContractLoader，
+// 用 const 会撞 TDZ（Cannot access before initialization）。
+function fakeBaseRows() {
+  return [
+    { id: 'persona', name: '@deepseek-ai/dsh-persona', config: { prefix: '部署默认 persona' } },
+    { id: 'agent-instructions', name: '@deepseek-ai/dsh-agent-instructions' },
+    { id: 'tool-fs', name: '@deepseek-ai/dsh-tool-fs' },
+    { id: 'delegation', name: 'cordis:group', group: true, config: [{ id: 'tool-subagent', name: '@deepseek-ai/dsh-tool-subagent' }] },
+  ]
+}
 
-function makeBasePresetEntry(rows = FAKE_BASE_ROWS, id = 'standard') {
+function makeBasePresetEntry(rows = fakeBaseRows(), id = 'standard') {
   return { options: { id: `preset-${id}`, name: '@deepseek-ai/dsh-agent-preset', config: { id, plugins: rows } } }
 }
 
@@ -1610,7 +1621,7 @@ function makeFakeAgentPresets({ brokenIds = new Set(), listGate } = {}) {
 }
 
 /** 假 loader：提供 tool-subagent / persona 的模块解析 + 默认 preset 声明。 */
-function makeContractLoader({ baseRows = FAKE_BASE_ROWS, agentPresetId = 'standard' } = {}) {
+function makeContractLoader({ baseRows = fakeBaseRows(), agentPresetId = 'standard' } = {}) {
   return {
     import: async (specifier) => (
       specifier === '@deepseek-ai/dsh-tool-subagent' || specifier === '@deepseek-ai/dsh-persona' ? {} : undefined
@@ -1651,7 +1662,12 @@ await okAsync('v0.6 假宿主自测：loader 默认 preset 声明可取到 rows�
   assert.equal(await loader.import('@deepseek-ai/unknown'), undefined)
 })
 
-function makeComposeCtx({ llm, agentPresets, loader } = {}) {
+function makeComposeCtx({
+  llm,
+  agentPresets = makeFakeAgentPresets().service, // v0.6 默认契约就绪；契约缺席路径显式传 null
+  loader = makeContractLoader(),
+  injectImpl, // v0.6：契约时序用例可注入 inject 行为（缺省 noop = 永不回调）
+} = {}) {
   const logs = { info: [], warn: [], error: [] }
   const calls = { plugin: [], disposes: [], announcements: [] }
   const handlers = new Map()
@@ -1659,8 +1675,8 @@ function makeComposeCtx({ llm, agentPresets, loader } = {}) {
     logger: { info: (m) => logs.info.push(m), warn: (m) => logs.warn.push(m), error: (m) => logs.error.push(m) },
     get: (n) => ({
       llm,
-      agentPresets, // v0.6：注入假 registry（缺省 undefined = 契约自检不通过路径）
-      loader: loader ?? { import: async (specifier) => (specifier === '@deepseek-ai/dsh-tool-subagent' ? {} : undefined) },
+      agentPresets, // v0.6：假 registry（undefined = 契约自检不通过路径）
+      loader,
     })[n],
     plugin: async (mod, cfg) => { // 桩 fiber：记录注册配置，dispose 记账（AC-12/15 断言面）
       calls.plugin.push(cfg)
@@ -1672,7 +1688,7 @@ function makeComposeCtx({ llm, agentPresets, loader } = {}) {
       handlers.get(event).push(handler)
     },
     effect: (fn) => fn(),
-    inject: () => {}, // v0.4 起不再用 settings 软接入；保留空实现以证明不依赖它
+    inject: injectImpl ?? (() => {}), // v0.4 起不再用 settings 软接入；v0.6 用 inject 等 agentPresets
   }
   /** 触发一次 cordis volatile 配置提交（面板保存 → configEditor 写 profile patch → loader 提交）。 */
   const fireVolatile = () => { for (const handler of handlers.get('loader/volatile-update') ?? []) handler() }
@@ -2084,6 +2100,37 @@ await okAsync('configMtimeMs 归因：生效来源是 jsonc → 透出 mtime（�
     const stateB = await readStartupReport({ env: { DSH_HOME: tmp }, now: new Date(pinned.getTime() + 30 * DAY) })
     assert.deepEqual(stateB.anomalies, [],
       `接管后不得出现「配置超龄」⚠️（不许把被让位文件的年龄算到面板头上）：${JSON.stringify(stateB.anomalies)}`)
+  } finally {
+    __setTestOverrides(undefined)
+    if (prevHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = prevHome
+  }
+})
+
+// --- v0.6 T4：契约自检（dsh ≥0.2.1）——缺 agentPresets 服务必须 fail-loud 但不抛 ---
+await okAsync('v0.6 契约自检：无 agentPresets 服务 → warn + 角色全 failed + 报告仍写出（v0.6/A12/A17）', async () => {
+  const tmp = await mkdtemp(join(tmpdir(), 'dsh-rg-v6-contract-'))
+  const prevHome = process.env.DSH_HOME
+  process.env.DSH_HOME = tmp
+  __setTestOverrides({ debounceMs: 1, maxWaitMs: 5, presetsReadyTimeoutMs: 20 })
+  try {
+    // 注意用 null（不是 undefined）：makeComposeCtx 的参数默认值只在 undefined 时生效，
+    // 传 null 才能表达「服务缺席」。服务缺席用 inject 通道回传（不用超时路径：超时定时器是
+    // unref 的，测试进程没有其它句柄时会直接退出，生产宿主则不存在该问题）。
+    const fake = makeComposeCtx({
+      agentPresets: null,
+      loader: makeContractLoader(),
+      injectImpl: (deps, cb) => { setTimeout(() => cb({ agentPresets: undefined }), 5) },
+    })
+    await apply(fake.ctx, { debounceMs: 1, maxWaitMs: 5, presetsReadyTimeoutMs: 20 })
+    const report = await waitForReport(reportPathOf(tmp), 8000)
+    assert.equal(fake.calls.plugin.length, 0, '无 agentPresets 服务时不得注册任何角色')
+    assert.deepEqual(report.registered, [], 'registered 必须为空')
+    assert.deepEqual(report.failed, Object.keys(DEFAULT_ROLES), '角色必须全部进 failed[]（fail-loud，不静默）')
+    assert.ok(
+      fake.logs.warn.some((m) => m.includes('0.2.1') && m.includes('agentPresets')),
+      `必须有一条明确的 0.2.1 契约警告，实为：${JSON.stringify(fake.logs.warn)}`,
+    )
   } finally {
     __setTestOverrides(undefined)
     if (prevHome === undefined) delete process.env.DSH_HOME
