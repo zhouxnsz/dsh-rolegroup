@@ -2245,6 +2245,11 @@ await okAsync('v0.6 回收顺序：重组装时先 fiber 后 preset，一一对�
       assert.ok(presetIdx >= 0, `${name} 的 preset 必须被 dispose`)
       assert.ok(fiberIdx < presetIdx, `${name} 必须先 fiber 后 preset（实际 ${fiberIdx} vs ${presetIdx}）`)
     }
+    // A18（泄漏检测）：重组装后 registry 里必须恰是当前角色集的 preset，无残留旧定义
+    assert.deepEqual(
+      [...presets.definitions.keys()].sort(),
+      Object.keys(DEFAULT_ROLES).map((n) => `rolegroup-${n}`).sort(),
+    )
   } finally {
     __setTestOverrides(undefined)
     if (prevHome === undefined) delete process.env.DSH_HOME
@@ -2300,6 +2305,87 @@ await okAsync('v0.6 重载幂等：同一 registry 上二次 apply 不撞重复 
       `不得出现重复 id 错误：${JSON.stringify(fake.logs.error)}`,
     )
     assert.equal(presets.definitions.size, 7)
+  } finally {
+    __setTestOverrides(undefined)
+    if (prevHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = prevHome
+  }
+})
+
+// --- v0.6 T6：preset 健康审计（finalize 内）+ 报告/公告一致性 + 剪枝回收 ---
+await okAsync('v0.6 审计时机：apply 期间不得调 list()，finalize 恰 1 次（死锁 oracle，v0.6/A6a）', async () => {
+  const tmp = await mkdtemp(join(tmpdir(), 'dsh-rg-v6-oracle-'))
+  const prevHome = process.env.DSH_HOME
+  process.env.DSH_HOME = tmp
+  __setTestOverrides({ debounceMs: 1, maxWaitMs: 10 })
+  try {
+    const presets = makeFakeAgentPresets()
+    const release = presets.holdList() // list() 在 finalize 前被调用会挂住 → 死锁 oracle
+    const fake = makeComposeCtx({ agentPresets: presets.service, loader: makeContractLoader() })
+    await apply(fake.ctx, { debounceMs: 1, maxWaitMs: 10 })
+    assert.equal(
+      presets.calls.filter((c) => c[0] === 'list').length, 0,
+      'apply 返回时不得调用 list()（在宿主 row activation 内调会自等 loader.await）',
+    )
+    release()
+    await waitForReport(reportPathOf(tmp), 8000)
+    await waitForCond(
+      () => presets.calls.filter((c) => c[0] === 'list').length === 1,
+      'finalize 调 list 恰 1 次',
+      8000,
+    )
+  } finally {
+    __setTestOverrides(undefined)
+    if (prevHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = prevHome
+  }
+})
+
+await okAsync('v0.6 审计一致性：preset broken → 移出 registered/公告、进 invalid、回收 preset+fiber（v0.6/A6b）', async () => {
+  const tmp = await mkdtemp(join(tmpdir(), 'dsh-rg-v6-broken-'))
+  const prevHome = process.env.DSH_HOME
+  process.env.DSH_HOME = tmp
+  __setTestOverrides({ debounceMs: 1, maxWaitMs: 5 })
+  try {
+    const presets = makeFakeAgentPresets({ brokenIds: new Set(['rolegroup-analyst']) })
+    const fake = makeComposeCtx({ agentPresets: presets.service, loader: makeContractLoader() })
+    await apply(fake.ctx, { debounceMs: 1, maxWaitMs: 5 })
+    const report = await waitForReport(reportPathOf(tmp), 8000)
+    assert.deepEqual(report.registered.map((r) => r.toolName).includes('analyst'), false, 'broken 角色不得进 registered')
+    assert.deepEqual(report.invalid.map((i) => i.toolName), ['analyst'], 'broken 角色必须进 invalid')
+    assert.ok(report.invalid[0].reason.includes('agent preset'), report.invalid[0].reason)
+    assert.equal(presets.definitions.has('rolegroup-analyst'), false, 'broken preset 必须回收')
+    assert.deepEqual(fake.calls.disposes.map((c) => c.toolName), ['analyst'], 'broken 角色的 fiber 必须 dispose')
+    const lastAnnouncement = fake.calls.announcements.at(-1) ?? ''
+    assert.ok(!lastAnnouncement.includes('`analyst`'), '公告不得含被审计剔除的角色')
+  } finally {
+    __setTestOverrides(undefined)
+    if (prevHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = prevHome
+  }
+})
+
+await okAsync('v0.6 剪枝路径：provider 未注册被剪枝时，对应 preset 同步回收（v0.6/A9）', async () => {
+  const tmp = await mkdtemp(join(tmpdir(), 'dsh-rg-v6-prune-'))
+  const prevHome = process.env.DSH_HOME
+  process.env.DSH_HOME = tmp
+  __setTestOverrides({ debounceMs: 1, maxWaitMs: 5 })
+  try {
+    const llm = {
+      listProviders: () => [{ id: 'deepseek-official' }],
+      listModels: async () => [{ id: 'deepseek-flash' }],
+    }
+    const presets = makeFakeAgentPresets()
+    const fake = makeComposeCtx({ llm, agentPresets: presets.service, loader: makeContractLoader() })
+    await apply(fake.ctx, { debounceMs: 1, maxWaitMs: 5 })
+    const report = await waitForReport(reportPathOf(tmp), 8000)
+    assert.deepEqual(
+      report.invalid.map((i) => i.toolName),
+      ['analyst', 'planner', 'coder', 'reviewer', 'scribe'],
+      '只注册了 deepseek-official 的 provider：其余 5 个角色应被剪枝',
+    )
+    assert.deepEqual([...presets.definitions.keys()].sort(), ['rolegroup-fallback', 'rolegroup-scout'])
+    assert.deepEqual(fake.calls.disposes.map((c) => c.toolName).sort(), ['analyst', 'coder', 'planner', 'reviewer', 'scribe'])
   } finally {
     __setTestOverrides(undefined)
     if (prevHome === undefined) delete process.env.DSH_HOME
