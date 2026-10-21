@@ -3,7 +3,7 @@
 dsh 生态的**角色化委派插件**：把「这类活该用哪个模型」固化下来——一次定义**角色**（名字 + 绑定模型 + persona），
 之后按角色名委派，不必每次手写 `provider`/`model`。每个角色挂一个宿主 `dsh-tool-subagent` 实例，**角色名即工具名**。
 
-> 版本 **0.5.0** ｜ 实测适配 dsh **0.2.0-rc.2** ｜ License MIT
+> 版本 **0.6.0** ｜ 实测适配 dsh **0.2.1-rc.2**（v0.6 起仅支持 ≥0.2.1）｜ License MIT
 
 ---
 
@@ -83,6 +83,10 @@ dsh --profile web --dump-config | grep -A1 dsh-rolegroup   # 应出现 - id: dsh
 模型搭配是**数据驱动**的（本项目用三轮、58 格评测确定），所以上表是初值而非定论——
 **你的实际绑定以 `/rolegroup doctor` 为准**。
 
+**角色怎么实现（v0.6）**：每个角色 = 一个委派工具实例 + 一个**自动生成的 Agent Preset**
+（克隆你**默认会话模式**的完整组合 → 替换 persona → 剔除委派组）。所以「设置 → Agent 预设」里会看到
+7 个「角色：xxx」：它们自动生成，**不要删除/改名，也不要把主会话选成它们**。
+
 ## 4. 配置
 
 ### 查找顺序（第一个命中即停）
@@ -132,6 +136,13 @@ jsonc 链自身也是这样（项目文件存在时，用户文件完全不被�
 - **启动路由校验**：provider 未注册 → 该角色**不注册** + actionable 错误日志；模型不在广告列表 → 警告但注册（委派时预检最终裁决）；
 - **`maxDepth: 1`**：主会话可委派，角色子代理不可再委派（**配 `0` 会把顶层委派也挡掉**）；
 - **配置不热生效**：改 jsonc 后需重启/开新会话。
+- **角色实现（v0.6）**：persona 住在 Agent Preset 的 `@deepseek-ai/dsh-persona` 行里，委派工具用
+  `agentPreset` 选中它（`maxDepth: 1`）；
+- **委派语义**：立即返回 subagent id，任务完成时收到完成通知（不要轮询等待）；
+- **角色子会话不可再委派**：preset 已剔除 `delegation` 组（比 v0.5 更严格）；
+- **基底不跟随会话模式**：角色子会话恒用你的**默认模式**克隆（本机 `standard`）；单会话选 PTC/最小/创造
+  等模式不改变角色工具面。权限 preset（read-only 等）仍随委派继承；
+- **仅支持 dsh ≥ 0.2.1**：0.2.0 上插件仍加载（面板/doctor 可用），但角色**不注册**并打一条明确警告。
 
 > **ℹ️ `readonly` 字段已于 v0.5 移除**：老配置里若仍写 `"readonly": true/false`，会得到一条**迁移提示**
 > （只警告不拒收，角色照常注册），但该字段**不再有任何作用**。
@@ -206,13 +217,15 @@ fallback deepseek-official/deepseek-flash ✅       ✅
 - **配置年龄提示**：生效配置超 14 天未改动出 ⚠️（含天数与上次改动日期），提醒复核「当初顶上的临时覆盖」是否该回切；
   走提示通道，**不计入异常数**；⚠️ 该提示**只适用于 jsonc 文件来源**——面板接管的 settings 层没有时间戳，
   故接管状态下不产生此提示（也不会拿被让位的 jsonc 文件的年龄冒充）；
-- llm 服务不可用时可用性整列标 `➖`（不假报 ✅）；快照只在启动终验时写一次，故配置改动需重启/新会话后才更新。
+- llm 服务不可用时可用性整列标 `➖`（不假报 ✅）；快照只在启动终验时写一次，故配置改动需重启/新会话后才更新；
+- **preset 问题也会体现在报告里**：角色对应的 Agent Preset 激活失败或失踪时，该角色进 `invalid[]`（附原因）
+  且**不注册**——委派会表现为「工具不存在」。
 
 ## 7. 开发
 
 ```sh
 npm install         # ★ 首次 clone 后必跑：devDependency esbuild（客户端构建需要）
-npm test            # 离线 smoke test（89 项纯逻辑，约 0.2s；pretest 会自动跑 link:deps）
+npm test            # 离线 smoke test（108 项纯逻辑，约 0.3s；pretest 会自动跑 link:deps）
 npm run link:deps   # ★ 首次 clone 后、以及 dsh 升级/换部署树后必跑：把部署树的 schemastery 软链进本仓库
 npm run build:client  # 改了 src/client/** 或 lib/roles.js 后：重建产物 lib/client.js
 ```
@@ -238,12 +251,15 @@ npm run build:client  # 改了 src/client/** 或 lib/roles.js 后：重建产物
 
 ## 8. 兼容性
 
-实测适配 **dsh 0.2.0-rc.2**；`lib/` 只依赖 0.1.7 起的 **Config-schema settings 范式**（条目 `Config` + `.volatile()`
+实测适配 **dsh 0.2.1-rc.2**；`lib/` 依赖 0.1.7 起的 **Config-schema settings 范式**（条目 `Config` + `.volatile()`
 → 命名空间；客户端 `configForms` + `settings.section`）。
 
+- **v0.6 起仅支持 dsh ≥ 0.2.1**：0.2.1 移除了委派工具的 `persona` 字段，persona 必须由 Agent Preset
+  承载（见 §4）。在 0.2.0 及更早版本上，本插件仍能加载、面板/doctor 可用，但**角色不会注册**，启动日志
+  会明确要求升级；
 - 从 **0.1.7-rc.2 起可用**；0.1.7 之前的 `settings.register` / `SettingsScope` / `settings.plugin.item` / `settings.yaml`
   已被上游移除，v0.3 的旧面板随之作废并由 **v0.4 完成迁移**；
-- **0.2.0-rc.2 复核：零改动可运行**（契约点全存活、关键包逐字节未变、真宿主行为一致）。
+- **0.2.1-rc.2：v0.6 完成角色机制迁移**（角色 = 克隆默认 preset + persona，替代已移除的内联 persona）。
 
 > **关于 Plugins 页**：配置面板在**设置页**（§5），所以本插件**不会**出现在 Plugins 页的「官方」组。
 > 那是上游的两条判据决定的：`installed` = 名字在 profile 的 `dependencies` 里、`optional` = 名字在
@@ -254,6 +270,14 @@ npm run build:client  # 改了 src/client/** 或 lib/roles.js 后：重建产物
 > 即用官方插件管理器安装（见 §2）。
 
 ## 9. 常见问题
+
+**「设置 → Agent 预设」里为什么多出 7 个「角色：xxx」？**
+它们是本插件自动生成的（每个角色一个：克隆你的默认模式组合 + 替换 persona + 剔除委派组）。
+**不要删除/改名，也不要把主会话选成它们**——删了对应角色会在下次启动/热更新时被审计为不可用；主会话选成
+角色 preset 会得到一个「没有标准工具」的会话。改角色配置请用本插件的面板或 `rolegroup.jsonc`。
+
+**我换了会话模式（PTC / 最小 / 创造），角色工具面为什么不变？**
+角色子会话的基底是**你的默认模式**（本机 `standard`），不跟随单会话选择的模式；只用标准模式时无差异。
 
 **装完角色工具没出现？**
 ① 确认 `--dump-config` 里有 `- id: dsh-rolegroup`；② **重启 `dsh web` + 开新会话**（配置与代码都不热生效）；

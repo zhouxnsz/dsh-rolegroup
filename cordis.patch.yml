@@ -2,8 +2,11 @@
 # At load time it reads the role config (project `.dsh/rolegroup.jsonc` of the
 # launch cwd, else `$DSH_HOME/rolegroup.jsonc`, else built-in defaults) and
 # dynamically registers one `@deepseek-ai/dsh-tool-subagent` instance per role
-# (fixed provider/model + persona + maxDepth:1; depth 0 would also block
-# top-level delegations).
+# (fixed provider/model + maxDepth:1; depth 0 would also block top-level
+# delegations). Requires dsh >= 0.2.1: since 0.2.1 a delegation tool rejects
+# `persona`, so each role also gets an auto-generated Agent Preset (a clone of
+# the deployment default preset with the persona replaced and the delegation
+# group removed), selected via `agentPreset`.
 #
 # Note: as of v0.5 no `toolFilter` is mounted — `readonly` was removed because a
 # tool-surface allow-list cannot express a permission boundary. Read-only is the

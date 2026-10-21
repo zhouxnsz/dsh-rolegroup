@@ -5,7 +5,7 @@ work" once, as a **role** (a name + a bound model + a persona), so later you del
 hand-writing `provider`/`model` every time. Each role mounts one host `dsh-tool-subagent` instance, and
 **the role name is the tool name**.
 
-> Version **0.5.0** ｜ verified against dsh **0.2.0-rc.2** ｜ MIT
+> Version **0.6.0** ｜ verified against dsh **0.2.1-rc.2** (v0.6+ supports ≥0.2.1 only) ｜ MIT
 
 ---
 
@@ -95,6 +95,11 @@ values**, overridable via `rolegroup.jsonc`):
 Model pairings are **data-driven** (three evaluation rounds, 58 cells, decided this table), so the table above
 holds initial values rather than verdicts — **your effective bindings are whatever `/rolegroup doctor` prints**.
 
+**How roles are implemented (v0.6)**: each role = one delegation-tool instance + one **auto-generated Agent
+Preset** (clone of your **default session mode** composition → persona replaced → delegation group removed).
+That is why **Settings → Agent presets** shows 7 entries named "角色：xxx": they are generated — **do not delete
+or rename them, and do not select one for a main session**.
+
 ## 4. Configuration
 
 ### Lookup order (first hit wins)
@@ -150,6 +155,16 @@ live, read the "config source" line of `/rolegroup doctor`.
 - **`maxDepth: 1`**: the main session may delegate, role subagents may not delegate further (**setting `0`
   would also block top-level delegation**);
 - **Config is not hot-applied**: after editing the jsonc, restart / open a new session.
+- **Role implementation (v0.6)**: the persona lives in the Agent Preset (`@deepseek-ai/dsh-persona` row); the
+  delegation tool selects it via `agentPreset` (`maxDepth: 1`);
+- **Delegation semantics**: the call returns a subagent id immediately; a completion notice arrives when the
+  task finishes (do not poll);
+- **Role sub-sessions cannot delegate further**: the preset drops the `delegation` group (stricter than v0.5);
+- **The base does not follow session modes**: role sub-sessions always clone your **default mode** (`standard`
+  on this machine); selecting PTC / minimal / creative for one session does not change role tool surfaces.
+  Permission presets (read-only etc.) are still inherited by delegations;
+- **dsh ≥ 0.2.1 only**: on 0.2.0 the plugin still loads (panel/doctor work) but roles are **not registered** and
+  a clear warning is logged.
 
 > **ℹ️ The `readonly` field was removed in v0.5**: a legacy `"readonly": true/false` in your config now
 > yields a **migration notice** (a warning, not a rejection — the role still registers), but the field has
@@ -238,13 +253,15 @@ Behaviour notes:
   panel carries no timestamp, so while the panel is in takeover no such notice is produced (and the age of a
   yielded jsonc file is never passed off as the panel's);
 - When the llm service is unavailable the whole availability column reads `➖` (never a false ✅); the snapshot is
-  written once, during startup finalisation, so config changes appear only after a restart / new session.
+  written once, during startup finalisation, so config changes appear only after a restart / new session;
+- **Preset problems show up in the report too**: when a role's Agent Preset fails to activate or disappears, the
+  role lands in `invalid[]` (with the reason) and is **not registered** — delegating then reports "no such tool".
 
 ## 7. Development
 
 ```sh
 npm install         # ★ required once after cloning: devDependency esbuild (client build)
-npm test            # offline smoke suite (89 pure-logic cases, ~0.2s; pretest runs link:deps)
+npm test            # offline smoke suite (108 pure-logic cases, ~0.3s; pretest runs link:deps)
 npm run link:deps   # ★ required once after cloning, and after a dsh upgrade / tree move
 npm run build:client  # after editing src/client/** or lib/roles.js: rebuild lib/client.js
 ```
@@ -272,14 +289,17 @@ Layout:
 
 ## 8. Compatibility
 
-Verified against **dsh 0.2.0-rc.2**; `lib/` depends only on the **Config-schema settings model** introduced in
+Verified against **dsh 0.2.1-rc.2**; `lib/` relies on the **Config-schema settings model** introduced in
 0.1.7 (entry `Config` + `.volatile()` → namespace; client `configForms` + `settings.section`).
 
+- **v0.6+ supports dsh ≥ 0.2.1 only**: 0.2.1 removed the delegation tool's `persona` field, so the persona must
+  live in an Agent Preset (see §4). On 0.2.0 and older the plugin still loads (panel/doctor work), but **roles
+  are not registered** and the startup log explicitly asks for an upgrade;
 - Usable from **0.1.7-rc.2** onward; before 0.1.7 the `settings.register` / `SettingsScope` /
   `settings.plugin.item` / `settings.yaml` APIs were removed upstream, which invalidated the v0.3 panel and
   was **migrated in v0.4**;
-- **0.2.0-rc.2 re-check: runs unchanged** (all contract points alive, key packages byte-identical, real-host
-  behaviour unchanged).
+- **0.2.1-rc.2: v0.6 migrates the role mechanism** (role = cloned default preset + persona, replacing the
+  removed inline persona).
 
 > **On the Plugins page**: the config panel lives in **Settings** (§5), so this plugin does **not** appear under
 > the Plugins page's "Official" group. Upstream decides with two flags: `installed` = the name is in the profile's
@@ -291,6 +311,17 @@ Verified against **dsh 0.2.0-rc.2**; `lib/` depends only on the **Config-schema 
 > profile dependency, i.e. be installed with the official plugin manager (see §2).
 
 ## 9. FAQ
+
+**Why do 7 "角色：xxx" entries appear under Settings → Agent presets?**
+They are generated by this plugin (one per role: clone of your default mode composition + persona replaced +
+delegation group removed). **Do not delete or rename them, and do not pick one for a main session** — a deleted
+preset makes the role fail the health audit on the next start/reload, and selecting a role preset for a main
+session yields a session without the standard tools. Edit role config through this plugin's panel or
+`rolegroup.jsonc`.
+
+**I switched the session mode (PTC / minimal / creative) — why is the role tool surface unchanged?**
+Role sub-sessions are based on **your default mode** (`standard` on this machine), not on the per-session mode.
+No difference if you only use the standard mode.
 
 **Installed, but no role tools appeared?**
 ① Check that `--dump-config` shows `- id: dsh-rolegroup`; ② **restart `dsh web` and open a new session** (neither

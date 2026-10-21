@@ -1,6 +1,6 @@
 {
   "name": "dsh-rolegroup",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "角色化委派层：角色（名字 + 绑定模型 + persona）× dsh-tool-subagent 实例；只读靠会话级 permission preset，与 dsh-changeflow 松耦合配合",
   "license": "MIT",
   "author": "Zhou.XiaoNing",

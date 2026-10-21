@@ -6,8 +6,9 @@
 
 ## 这是什么
 
-dsh 的**角色化委派插件**：角色 = 名字 + 绑定模型 + persona；每个角色挂一个宿主
-`dsh-tool-subagent` 实例，**角色名即工具名**。定位与用法见 [README](./README.md) §1。
+dsh 的**角色化委派插件**：角色 = 名字 + 绑定模型 + persona；每个角色 = 一个宿主
+`dsh-tool-subagent` 实例 + 一个**自动生成的 Agent Preset**（persona 住在后者），**角色名即工具名**。
+**要求 dsh ≥ 0.2.1**（0.2.1 起委派工具拒绝内联 persona）。定位与用法见 [README](./README.md) §1。
 
 ## 架构地图
 
@@ -15,6 +16,7 @@ dsh 的**角色化委派插件**：角色 = 名字 + 绑定模型 + persona；�
 |---|---|
 | `lib/index.js` | 装配：读配置 → 合并 → 注册角色实例；volatile 变更 → 重组装；启动报告 |
 | `lib/roles.js` | 内置角色表、配置合并（`mergeRoles`）、实例配置构建（`buildInstanceConfig`）、迁移提示文案 |
+| `lib/presets.js` | 角色 Agent Preset 的纯函数构建：克隆默认 preset rows（JsExpr 按引用）/ 替换 persona / 剔除 delegation |
 | `lib/config.js` | settings 条目 `Config`（schemastery）——命名空间的对外契约 |
 | `lib/settings-table.js` | section ↔ 文件配置的双向映射、跨字段校验 |
 | `lib/doctor.js` | 纯逻辑：快照读取/归一化、`auditRoles`、`renderDoctorText` |
@@ -56,6 +58,18 @@ dsh 的**角色化委派插件**：角色 = 名字 + 绑定模型 + persona；�
   不是"沿用下层"。面板空覆盖表 = 不做任何覆盖 = 回到内置 7 角色，故「零角色」不可表达。
   README §4/§5 已按此写死；**别再写成「未列出的照旧沿用下层」**（2026-10-15 实测：这句会让用户以为
   jsonc 覆盖还在生效，而它已被整层让位）。
+- **dsh 0.2.1 起 `persona`/`toolFilter`/`backgroundMode` 被 tool-subagent 拒绝**（出现即 throw）；persona
+  必须住 **Agent Preset**。而显式 `agentPreset` 是**替换**父组合（不选才 `composeFrom` 继承）——所以角色
+  preset 必须**克隆默认 preset 的完整 rows**（`lib/presets.js`）；persona-only preset 会让角色子会话零工具/
+  零指令（v0.6 前的一版 spec 因此被对抗性审阅打回）。**`!!js` 表达式（JsExpr 实例）必须按引用保留**，JSON
+  深拷会破坏它。
+- **角色基底 = `agentPresets.defaultId`**（用户默认模式，本机 `standard`），**不跟随单会话选择的模式**；
+  preset rows 从 `ctx.loader.entries()` 取**有效** `config.plugins`（profile patch 覆盖会反映在这里）。
+- **preset 生命周期**：apply **开头**注册 early effect，卸载时 await 回收全部 preset+fiber——否则孤儿
+  preset 会让重载撞 `Duplicate agent preset` 并使全部角色失败。`register()` **吞掉**激活失败（只写
+  `broken`），必须自己审计。
+- **preset 健康审计只能在 finalize 做**：在 apply（宿主 row activation）里调 `list()/resolve()` 会触发
+  registry `await owner.loader.await()` **自等挂死**；审计异常/超时必须只 warn，且**报告必须写出**。
 - **`maxDepth` 配 `0` 会把顶层委派也挡掉**，不只是禁止套娃。
 - **配置不热生效**：快照只在启动剪枝终验时写一次；改配置需重启 + 开新会话。
 - **provider 未注册的角色会被剪枝**（不注册、只记进 `invalid[]`）。兜底角色尤其要留意：
