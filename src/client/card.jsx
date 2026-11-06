@@ -7,23 +7,40 @@
 // NOTE: node cannot parse JSX — never import this file from node; index.js loads it lazily
 // inside apply (which only ever runs in the browser shell).
 
-const CSS = '.dsh-rg-card{border:.5px solid var(--dsw-alias-border-l4);border-radius:8px;padding:12px;display:grid;gap:10px}'
-  + '.dsh-rg-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px}'
-  + '.dsh-rg-titles{display:grid;gap:4px;min-width:0}'
-  + '.dsh-rg-title{margin:0;font-size:13px;font-weight:600;color:var(--dsw-alias-label-primary)}'
-  + '.dsh-rg-desc{margin:0;font-size:12px;line-height:1.5;color:var(--dsw-alias-label-tertiary)}'
-  + '.dsh-rg-dirty{font-size:11px;color:var(--dsw-alias-label-warning);border:.5px solid var(--dsw-alias-border-l3);border-radius:6px;padding:2px 6px;white-space:nowrap}'
+import { PLUGIN_REPO_URL, PLUGIN_VERSION } from './meta.js'
+
+const CSS = '.dsh-rg-card{display:grid;gap:10px}'
+  + '.dsh-rg-headBlock{min-width:0}'
+  + '.dsh-rg-head{display:flex;justify-content:space-between;align-items:center;gap:8px 16px;flex-wrap:wrap}'
+  + '.dsh-rg-titleRow{display:flex;align-items:baseline;gap:8px;min-width:0;flex-wrap:wrap}'
+  + '.dsh-rg-title{margin:0;font-size:20px;line-height:28px;font-weight:600;color:var(--dsw-alias-label-primary)}'
+  + '.dsh-rg-version{font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums;white-space:nowrap}'
+  + '.dsh-rg-desc{margin:6px 0 0;font-size:12px;line-height:1.5;color:var(--dsw-alias-label-tertiary)}'
+  + '.dsh-rg-statusBlock{display:grid;gap:4px;justify-items:start;min-width:0}'
+  + '.dsh-rg-status{margin:0;display:flex;align-items:center;gap:6px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary)}'
+  + '.dsh-rg-status::before{content:"";flex:none;width:6px;height:6px;border-radius:50%;background:var(--dsw-alias-label-tertiary)}'
+  + '.dsh-rg-statusOn::before{background:var(--dsw-alias-state-success-primary)}'
+  + '.dsh-rg-layer{font-size:11px;line-height:1.5;color:var(--dsw-alias-label-tertiary)}'
+  + '.dsh-rg-layer summary{cursor:pointer}'
+  + '.dsh-rg-layer p{margin:4px 0 0;max-width:62em}'
+  + '.dsh-rg-empty{margin:0;font-size:12px;line-height:1.5;color:var(--dsw-alias-label-tertiary)}'
+  + '.dsh-rg-headActions{display:flex;align-items:center;gap:8px;flex-shrink:0}'
+  + '.dsh-rg-action{display:inline-flex;align-items:center;gap:6px;font-family:inherit;font-size:12px;line-height:18px;font-weight:500;color:var(--dsw-alias-label-primary);text-decoration:none;background:var(--dsw-alias-bg-layer-2);border:.5px solid var(--dsw-alias-border-l3);border-radius:6px;padding:3px 8px;white-space:nowrap;cursor:pointer}'
+  + '.dsh-rg-action:hover{border-color:var(--dsw-alias-brand-primary);color:var(--dsw-alias-brand-primary)}'
+  + '.dsh-rg-action:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}'
+  + '.dsh-rg-action svg{flex:none}'
+  + '.dsh-rg-dirty{font-size:11px;color:var(--dsw-alias-state-warn-label);border:.5px solid var(--dsw-alias-border-l3);border-radius:6px;padding:2px 6px;white-space:nowrap}'
   + '.dsh-rg-notice{margin:0;font-size:12px;line-height:1.5;color:var(--dsw-alias-label-tertiary)}'
   + '.dsh-rg-alert{margin:0;font-size:12px;line-height:1.5;color:var(--dsw-alias-label-error)}'
   + '.dsh-rg-catalogError{color:var(--dsw-alias-label-error);display:flex;justify-content:space-between;align-items:center;gap:12px;font-size:12px}'
   + '.dsh-rg-catalogError button{color:var(--dsw-alias-brand-primary);cursor:pointer;background:none;border:0;padding:0;font-size:12px}'
-  + '.dsh-rg-rows{display:grid;gap:6px;max-height:320px;overflow:auto}'
+  + '.dsh-rg-rows{display:grid;gap:6px}'
   + '.dsh-rg-row{border:.5px solid var(--dsw-alias-border-l4);border-radius:8px;padding:10px;display:grid;gap:8px}'
   + '.dsh-rg-rowHead{display:flex;align-items:center;gap:12px;min-width:0}'
   + '.dsh-rg-toolName{font-size:13px;font-weight:500;color:var(--dsw-alias-label-primary)}'
   + 'input.dsh-rg-toolName{flex:1;min-width:0;font-size:13px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-2);border:.5px solid var(--dsw-alias-border-l3);border-radius:6px;padding:3px 8px}'
   + '.dsh-rg-remove{color:var(--dsw-alias-label-error);cursor:pointer;background:none;border:0;padding:0;font-size:12px;white-space:nowrap}'
-  + '.dsh-rg-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px}'
+  + '.dsh-rg-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px}'
   + '.dsh-rg-field{display:grid;gap:4px;font-size:11px;color:var(--dsw-alias-label-tertiary);min-width:0}'
   + '.dsh-rg-field input,.dsh-rg-field select,.dsh-rg-field textarea{font-size:13px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-2);border:.5px solid var(--dsw-alias-border-l3);border-radius:6px;padding:4px 8px;min-width:0}'
   + '.dsh-rg-field textarea{min-height:64px;resize:vertical}'
@@ -36,6 +53,8 @@ const CSS = '.dsh-rg-card{border:.5px solid var(--dsw-alias-border-l4);border-ra
   + '.dsh-rg-actions button.dsh-rg-save{background:var(--dsw-alias-brand-primary);color:#fff}'
   + '.dsh-rg-actions button:disabled,.dsh-rg-add:disabled,.dsh-rg-remove:disabled,.dsh-rg-catalogError button:disabled{opacity:.5;cursor:default}'
   + '.dsh-rg-liveHint{margin:0;font-size:11px;line-height:1.5;color:var(--dsw-alias-label-tertiary)}'
+  + '.dsh-rg-configHint{margin:0;font-size:11px;line-height:1.5;color:var(--dsw-alias-label-tertiary)}'
+  + '.dsh-rg-retry{justify-self:start;font-family:inherit;font-size:12px;color:var(--dsw-alias-brand-primary);background:none;border:0;padding:0;cursor:pointer}'
 
 const CSS_TAG_ID = 'dsh-rolegroup/card.jsx'
 if (typeof document !== 'undefined' && document.querySelector('style[data-plugin-css=' + JSON.stringify(CSS_TAG_ID) + ']') === null) {
@@ -44,6 +63,32 @@ if (typeof document !== 'undefined' && document.querySelector('style[data-plugin
   tag.dataset.pluginCss = CSS_TAG_ID
   tag.textContent = CSS
   document.head.appendChild(tag)
+}
+
+/**
+ * GitHub mark (official 16×16 inline SVG; currentColor follows the link text colour).
+ * No icon package: this plugin has no extra runtime dependency — one path is enough.
+ */
+function GitHubMark() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+      <path
+        fill="currentColor"
+        d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8Z"
+      />
+    </svg>
+  )
+}
+
+/** Small file mark for the config-viewer button. */
+function FileMark() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+      <path d="M9.5 1.5H4a1 1 0 0 0-1 1v11a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V4.5L9.5 1.5Z" />
+      <path d="M9.5 1.5v3h3" />
+      <path d="M5.5 8h5M5.5 10.5h5" />
+    </svg>
+  )
 }
 
 /**
@@ -66,15 +111,52 @@ export function RolegroupCard(props) {
   // Same shape as the official cards: `if (props.view === "summary") return t("...")`.
   if (props.view === 'summary') return t('description')
 
+  const needsPrefill = state.effective?.required === true
   const disabled = !state.writable || state.saving
+    || (needsPrefill && state.effective.status !== 'ready' && state.effective.status !== 'error')
 
+  // Header, following the settings-page convention: plugin name + version + GitHub entry,
+  // description on the next line. The version comes from package.json via a build-time
+  // injection (see meta.js) — single source of truth, never hardcoded here.
   const head = (
-    <div className="dsh-rg-head">
-      <div className="dsh-rg-titles">
-        <h3 className="dsh-rg-title">{t('title')}</h3>
-        <p className="dsh-rg-desc">{t('description')}</p>
+    <div className="dsh-rg-headBlock">
+      <div className="dsh-rg-head">
+        <div className="dsh-rg-titleRow">
+          <h2 className="dsh-rg-title">{t('title')}</h2>
+          <span className="dsh-rg-version">{`v${PLUGIN_VERSION}`}</span>
+        </div>
+        <div className="dsh-rg-headActions">
+          {state.dirty ? <span className="dsh-rg-dirty">{t('dirtyBadge')}</span> : null}
+          <button
+            type="button"
+            className="dsh-rg-action"
+            disabled={state.config?.status === 'loading'}
+            aria-label={t('configFileAria')}
+            title={t('configFileAria')}
+            onClick={() => {
+              // Close Settings on success so the rightbar file preview just opened is visible.
+              void props.openConfig().then((opened) => {
+                if (opened === true && typeof props.close === 'function') props.close()
+              })
+            }}
+          >
+            <FileMark />
+            <span>{t('configFile')}</span>
+          </button>
+          <a
+            className="dsh-rg-action"
+            href={PLUGIN_REPO_URL}
+            target="_blank"
+            rel="noreferrer"
+            aria-label={t('githubAria')}
+            title={t('githubAria')}
+          >
+            <GitHubMark />
+            <span>{t('github')}</span>
+          </a>
+        </div>
       </div>
-      {state.dirty ? <span className="dsh-rg-dirty">{t('dirtyBadge')}</span> : null}
+      <p className="dsh-rg-desc">{t('description')}</p>
     </div>
   )
 
@@ -91,7 +173,14 @@ export function RolegroupCard(props) {
   const groups = state.catalog.groups
   const modelsOf = (provider) => groups.find((group) => group.id === provider)?.models ?? []
 
-  const renderRow = (row) => (
+  const renderRow = (row) => {
+    const modelInfo = modelsOf(row.provider).find((model) => model.id === row.model)
+    const efforts = Array.isArray(modelInfo?.reasoning?.efforts) ? modelInfo.reasoning.efforts : []
+    const defaultEffort = modelInfo?.reasoning?.defaultEffort
+    const defaultLabel = defaultEffort === undefined || defaultEffort === ''
+      ? t('reasoningEffortDefault')
+      : `${t('reasoningEffortDefault')} (${defaultEffort})`
+    return (
     <div className="dsh-rg-row" key={row.toolName}>
       <div className="dsh-rg-rowHead">
         {row.isCustom ? (
@@ -159,13 +248,32 @@ export function RolegroupCard(props) {
             />
           )}
         </label>
-        <label className="dsh-rg-field">
+        <label className={`dsh-rg-field${row.invalidFields.includes('reasoningEffort') ? ' dsh-rg-invalid' : ''}`}>
           <span>{t('fieldReasoningEffort')}</span>
-          <input
-            value={row.reasoningEffort}
-            disabled={disabled}
-            onChange={(event) => props.editRole(row.toolName, 'reasoningEffort', event.target.value)}
-          />
+          {catalogReady && modelInfo !== undefined && efforts.length > 0 ? (
+            <select
+              value={row.reasoningEffort}
+              disabled={disabled}
+              onChange={(event) => props.editRole(row.toolName, 'reasoningEffort', event.target.value)}
+            >
+              <option value="">{defaultLabel}</option>
+              {efforts.map((effort) => (
+                <option key={effort.id} value={effort.id}>{effort.name ?? effort.id}</option>
+              ))}
+              {row.reasoningEffort !== '' && !efforts.some((effort) => effort.id === row.reasoningEffort)
+                ? <option value={row.reasoningEffort}>{row.reasoningEffort}</option>
+                : null}
+            </select>
+          ) : catalogReady && modelInfo !== undefined ? (
+            <input value={row.reasoningEffort} disabled placeholder={t('reasoningEffortUnsupported')} />
+          ) : (
+            <input
+              value={row.reasoningEffort}
+              disabled={disabled}
+              placeholder={defaultLabel}
+              onChange={(event) => props.editRole(row.toolName, 'reasoningEffort', event.target.value)}
+            />
+          )}
         </label>
         <label className="dsh-rg-field">
           <span>{t('fieldSummary')}</span>
@@ -185,7 +293,8 @@ export function RolegroupCard(props) {
         />
       </details>
     </div>
-  )
+    )
+  }
 
   return (
     <div className="dsh-rg-card">
@@ -200,20 +309,54 @@ export function RolegroupCard(props) {
         </div>
       ) : null}
       {state.catalog.partial ? <p className="dsh-rg-notice">{t('catalogPartial')}</p> : null}
-      {state.takeover ? (
-        // Taken over: state the LAYER semantics explicitly — the effective table is this override
-        // table with the BUILT-IN table filling the gaps; rolegroup.jsonc yields entirely. Saying
-        // only "the file table is overridden" makes users think unlisted roles still keep jsonc.
-        <p className="dsh-rg-notice" role="status">{t('takeoverNote')}</p>
-      ) : (
-        // Not taken over yet: the table below is an EMPTY OVERRIDE table, not "no roles".
-        // The effective table comes from rolegroup.jsonc / the built-in table, and any role
-        // not listed here keeps using them.
-        <p className="dsh-rg-notice" role="status">{t('notTakeover')}</p>
-      )}
+      {/* One visible line says which layer is active; the long layer semantics (precedence,
+          all-or-nothing takeover, doctor) sit in a collapsed <details> so they never dominate
+          the page. Direct users skip paragraphs — 2026-10-21 user feedback. */}
+      <div className="dsh-rg-statusBlock">
+        <p className={`dsh-rg-status${state.takeover ? ' dsh-rg-statusOn' : ''}`} role="status">
+          {state.takeover ? t('statusTakeover') : t('statusNotTakeover')}
+        </p>
+        <details className="dsh-rg-layer">
+          <summary>{t('layerSummary')}</summary>
+          <p>{t('layerNote')}</p>
+        </details>
+      </div>
+      {state.effective?.status === 'loading' || state.effective?.status === 'idle'
+        ? <p className="dsh-rg-notice" role="status">{t('effectiveLoading')}</p>
+        : null}
+      {state.effective?.status === 'error' ? (
+        <>
+          <p className="dsh-rg-alert" role="alert">
+            {t('effectiveError')}{state.effective.error ? ` (${state.effective.error})` : ''}
+          </p>
+          <p className="dsh-rg-configHint">{t('effectiveErrorHint')}</p>
+          <button type="button" className="dsh-rg-retry" disabled={state.saving} onClick={props.retryEffective}>
+            {t('retryEffective')}
+          </button>
+        </>
+      ) : null}
+      {state.effective?.prefilled && state.rows.length > 0
+        ? <p className="dsh-rg-configHint">{t('prefillHint')}</p>
+        : null}
+      {state.config?.status === 'loading' ? <p className="dsh-rg-notice" role="status">{t('configOpening')}</p> : null}
+      {state.config?.status === 'error' ? (
+        <>
+          <p className="dsh-rg-alert" role="alert">
+            {t('configOpenFailed')}{state.config.error ? ` (${state.config.error})` : ''}
+          </p>
+          <p className="dsh-rg-configHint">{t('configRestartHint')}</p>
+        </>
+      ) : null}
+      {state.config?.notice === 'noFile' ? <p className="dsh-rg-notice" role="status">{t('configFileMissing')}</p> : null}
       {state.failed ? <p className="dsh-rg-alert" role="alert">{t('saveFailed')}</p> : null}
       {state.conflicted ? <p className="dsh-rg-alert" role="status">{t('conflicted')}</p> : null}
-      <div className="dsh-rg-rows">{state.rows.map(renderRow)}</div>
+      <div className="dsh-rg-rows">
+        {state.rows.length === 0
+          ? state.effective?.status === 'ready'
+            ? <p className="dsh-rg-empty">{state.takeover ? t('emptyTakeover') : t('emptyNotTakeover')}</p>
+            : null
+          : state.rows.map(renderRow)}
+      </div>
       <button type="button" className="dsh-rg-add" disabled={disabled} onClick={props.addRole}>
         + {t('addRole')}
       </button>

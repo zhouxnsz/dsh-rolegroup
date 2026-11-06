@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="dsh-rolegroup">
+<title>dsh-rolegroup</title>
+<desc>An R hub with three role nodes on a white tile.</desc>
+<defs>
+<radialGradient id="glow" cx="50%" cy="46%" r="52%"><stop offset="0" stop-color="#22D3EE" stop-opacity=".13"/><stop offset=".55" stop-color="#6366F1" stop-opacity=".05"/><stop offset="1" stop-color="#22D3EE" stop-opacity="0"/></radialGradient>
+<linearGradient id="hub" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#2DD4BF"/><stop offset="1" stop-color="#0D9488"/></linearGradient>
+<linearGradient id="violet" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#A78BFA"/><stop offset="1" stop-color="#5B21B6"/></linearGradient>
+<linearGradient id="amber" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#FBBF24"/><stop offset="1" stop-color="#B45309"/></linearGradient>
+<linearGradient id="sky" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#38BDF8"/><stop offset="1" stop-color="#0369A1"/></linearGradient>
+<filter id="soft" x="-60%" y="-60%" width="220%" height="220%"><feDropShadow dx="0" dy="9" stdDeviation="13" flood-color="#0F172A" flood-opacity=".16"/></filter>
+</defs>
+<rect width="512" height="512" rx="116" fill="#FFFFFF"/>
+<rect x="5" y="5" width="502" height="502" rx="112" fill="none" stroke="#E2E8F0" stroke-width="2"/>
+<circle cx="256" cy="274" r="222" fill="url(#glow)"/>
+<g transform="translate(0,28)">
+<circle cx="256" cy="256" r="168" fill="none" stroke="#94A3B8" stroke-opacity=".30" stroke-width="2" stroke-dasharray="3 13"/>
+<path d="M256 190 L256 146" stroke="#64748B" stroke-opacity=".38" stroke-width="5" stroke-linecap="round"/>
+<path d="M198 292 L158 314" stroke="#64748B" stroke-opacity=".38" stroke-width="5" stroke-linecap="round"/>
+<path d="M314 292 L354 314" stroke="#64748B" stroke-opacity=".38" stroke-width="5" stroke-linecap="round"/>
+<g filter="url(#soft)"><rect x="202" y="38" width="108" height="108" rx="30" fill="url(#violet)"/></g>
+<rect x="202" y="38" width="108" height="108" rx="30" fill="none" stroke="#FFFFFF" stroke-opacity=".32" stroke-width="2"/>
+<circle cx="256" cy="85" r="15.5" fill="#FFFFFF"/>
+<path d="M231 116.5 C231 94.5 241.5 94.5 256 94.5 C270.5 94.5 281 94.5 281 116.5 Z" fill="#FFFFFF"/>
+<g filter="url(#soft)"><rect x="60" y="280" width="108" height="108" rx="30" fill="url(#amber)"/></g>
+<rect x="60" y="280" width="108" height="108" rx="30" fill="none" stroke="#FFFFFF" stroke-opacity=".32" stroke-width="2"/>
+<circle cx="114" cy="327" r="15.5" fill="#FFFFFF"/>
+<path d="M89 358.5 C89 336.5 99.5 336.5 114 336.5 C128.5 336.5 139 336.5 139 358.5 Z" fill="#FFFFFF"/>
+<g filter="url(#soft)"><rect x="344" y="280" width="108" height="108" rx="30" fill="url(#sky)"/></g>
+<rect x="344" y="280" width="108" height="108" rx="30" fill="none" stroke="#FFFFFF" stroke-opacity=".32" stroke-width="2"/>
+<circle cx="398" cy="327" r="15.5" fill="#FFFFFF"/>
+<path d="M373 358.5 C373 336.5 383.5 336.5 398 336.5 C412.5 336.5 423 336.5 423 358.5 Z" fill="#FFFFFF"/>
+<g filter="url(#soft)"><path d="M256 184 L318 220 L318 292 L256 328 L194 292 L194 220 Z" fill="url(#hub)"/></g>
+<path d="M256 184 L318 220 L318 292 L256 328 L194 292 L194 220 Z" fill="none" stroke="#FFFFFF" stroke-opacity=".55" stroke-width="2"/>
+<path d="M256 202 L302 228 L302 284 L256 310 L210 284 L210 228 Z" fill="#0F172A" fill-opacity=".12"/>
+<path d="M216 206 H258 C282 206 298 220 298 240 C298 257 288 268 272 272 L300 304 H276 L252 276 H236 V304 H216 Z M236 226 V256 H258 C272 256 280 250 280 240 C280 230 272 226 258 226 Z" fill="#FFFFFF"/>
+</g>
+</svg>

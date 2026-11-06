@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "角色配置",
+    "description": "把「这类活该用哪个模型」固化下来：一次定义角色（名字 + 绑定模型 + persona），之后按角色名委派，不必每次手写 provider/model。"
+  }
+}

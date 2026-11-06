@@ -1,3 +1,4 @@
 node_modules/
 .worktrees/
 AGENTS.local.md
+dsh-rolegroup.code-workspace

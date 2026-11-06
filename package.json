@@ -1,7 +1,8 @@
 {
   "name": "dsh-rolegroup",
-  "version": "0.6.0",
-  "description": "角色化委派层：角色（名字 + 绑定模型 + persona）× dsh-tool-subagent 实例；只读靠会话级 permission preset，与 dsh-changeflow 松耦合配合",
+  "version": "0.6.1",
+  "description": "角色化委派插件：把「这类活该用哪个模型」固化为角色（名字 + 绑定模型 + persona），按角色名委派 · Role-based delegation: bind each kind of work to a model once and delegate by role name",
+  "icon": "assets/icon.svg",
   "license": "MIT",
   "author": "Zhou.XiaoNing",
   "repository": {
@@ -25,20 +26,24 @@
   "exports": {
     ".": "./lib/index.js",
     "./client": "./lib/client.js",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
   },
   "files": [
     "lib",
     "src",
     "scripts",
     "cordis.patch.yml",
-    "README.md"
+    "locale",
+    "README.md",
+    "assets/icon.svg"
   ],
   "scripts": {
     "link:deps": "node scripts/link-deployment-deps.mjs",
     "pretest": "node scripts/link-deployment-deps.mjs",
     "test": "node tests/smoke.mjs",
-    "build:client": "node scripts/build-client.mjs"
+    "build:client": "node scripts/build-client.mjs",
+    "prepack": "npm run build:client"
   },
   "dsh": {
     "bundle": {
@@ -54,8 +59,17 @@
       ]
     }
   },
-  "private": true,
+  "private": false,
   "devDependencies": {
     "esbuild": "0.28.2"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/schemastery": "^3.18.1"
+  },
+  "engines": {
+    "dsh": ">=0.2.1-rc.1"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

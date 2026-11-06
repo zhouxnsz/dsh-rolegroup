@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Rolegroup",
+    "description": "Define each kind of work as a role bound to one model, then delegate by role name instead of picking a provider and model every time."
+  }
+}

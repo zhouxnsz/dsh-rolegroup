@@ -4,7 +4,7 @@
 
 export const zh = {
   title: '角色配置',
-  description: '可视化编辑角色 ↔ 模型路由。生效优先级：本面板 > 项目 rolegroup.jsonc > 用户 rolegroup.jsonc > 内置表。',
+  description: '可视化编辑角色 ↔ 模型路由。',
   dirtyBadge: '未保存',
   save: '保存',
   discard: '放弃',
@@ -16,32 +16,48 @@ export const zh = {
   fieldProvider: '提供方',
   fieldModel: '模型',
   fieldReasoningEffort: '推理档位',
+  reasoningEffortDefault: '默认',
+  reasoningEffortUnsupported: '该模型不支持',
   fieldPersona: '人格设定',
   fieldSummary: '职责摘要',
+  github: 'GitHub',
+  githubAria: '在 GitHub 上打开 dsh-rolegroup 仓库',
+  configFile: '配置文件',
+  configFileAria: '在右侧栏打开当前配置文件',
+  configOpening: '正在打开配置文件…',
+  configOpenFailed: '无法打开配置文件',
+  configRestartHint: '若刚更新插件，请重启 dsh web 后重试。',
+  configFileMissing: '未找到 rolegroup.jsonc。',
   liveHint: '保存后新会话生效，进行中的会话不受影响',
-  conflicted: '配置已在别处被修改，草稿保留中；请放弃或重置后重试',
-  saveFailed: '保存失败（本地校验未通过或宿主拒绝），请检查标红字段后重试',
+  conflicted: '配置已在别处修改；草稿保留，请放弃或重置后重试',
+  saveFailed: '保存失败：请检查标红字段后重试',
   catalogLoading: '正在拉取模型目录…',
   catalogError: '模型目录拉取失败',
-  catalogPartial: '部分提供方目录拉取失败，候选可能不完整',
-  routeUnavailable: '当前路由不在模型目录中（保留以防丢配置）',
+  catalogPartial: '部分提供方不可用，候选可能不完整',
+  routeUnavailable: '不可用',
   selectProvider: '选择提供方',
   selectModel: '选择模型',
-  scopeUnavailable: 'rolegroup 设置命名空间不可用（宿主未注册或不可写），面板暂不可编辑',
-  notTakeover: '本面板尚未接管：当前生效的是 rolegroup.jsonc / 内置表，未在下面列出的角色一律沿用它们。'
-    + '空白 ≠ 没有角色——点「新增角色」加一行（只需加你想改的那些）并「保存」后，由本面板接管；'
-    // ⚠️ 这里是 UI 文案（React 按**纯文本**渲染，不解析 markdown）——强调只能用「」，
-    // 写 **xxx** 会被原样显示成星号（2026-10-20 真机截图发现）。
-    + '注意接管是「整层」的：rolegroup.jsonc 随后整层让位，只写在 jsonc 里的角色会回落内置表，'
-    + '故请把想保留的 jsonc 行一并加进来。'
-    + '「重置为文件配置」可退出接管。完整生效表见 /rolegroup doctor。',
-  takeoverNote: '本面板已接管：生效表 = 本表 + 内置表补底；rolegroup.jsonc 整层让位'
-    + '（未列出的角色回落内置表，不会沿用 jsonc）。完整生效表见 /rolegroup doctor。',
+  scopeUnavailable: '面板暂不可用：设置服务未就绪或不可写',
+  // 页面只保留一行状态；层级语义收进 <details> 折叠块（2026-10-21 用户：说明文字太长，直接用户不会看）。
+  statusNotTakeover: '当前生效：rolegroup.jsonc / 内置表（未接管）',
+  statusTakeover: '当前生效：本面板（内置表补底）',
+  emptyNotTakeover: '没有可编辑的角色；点「新增角色」手动添加。',
+  emptyTakeover: '没有覆盖项：全部角色使用内置表。',
+  effectiveLoading: '正在读取当前生效配置…',
+  effectiveError: '读取当前生效配置失败',
+  effectiveErrorHint: '可点「重试」重新读取；读取成功前请勿保存，避免覆盖文件配置。',
+  retryEffective: '重试',
+  prefillHint: '以下已填入当前生效配置；修改后保存，由本面板接管。',
+  layerSummary: '配置层级说明',
+  // 这里是 UI 文案（React 按**纯文本**渲染，不解析 markdown）——强调只能用「」，
+  // 写 **xxx** 会被原样显示成星号（2026-10-20 真机截图发现）。默认折叠，不占版面。
+  layerNote: '优先级：本面板 > 项目 rolegroup.jsonc > 用户 rolegroup.jsonc > 内置表。'
+    + '保存会把当前生效表整层写入面板并接管；「重置为文件配置」可退出接管。完整生效表见 /rolegroup doctor。',
 }
 
 export const en = {
   title: 'Role Routing',
-  description: 'Edit role ↔ model routes visually. Precedence: this panel > project rolegroup.jsonc > user rolegroup.jsonc > built-in table.',
+  description: 'Edit role ↔ model routes visually.',
   dirtyBadge: 'Unsaved',
   save: 'Save',
   discard: 'Discard',
@@ -53,26 +69,42 @@ export const en = {
   fieldProvider: 'Provider',
   fieldModel: 'Model',
   fieldReasoningEffort: 'Reasoning effort',
+  reasoningEffortDefault: 'Default',
+  reasoningEffortUnsupported: 'Not supported by this model',
   fieldPersona: 'Persona',
   fieldSummary: 'Summary',
+  github: 'GitHub',
+  githubAria: 'Open the dsh-rolegroup repository on GitHub',
+  configFile: 'Config file',
+  configFileAria: 'Open the current config file in the right sidebar',
+  configOpening: 'Opening the config file…',
+  configOpenFailed: 'Could not open the config file',
+  configRestartHint: 'If you just updated the plugin, restart dsh web and retry.',
+  configFileMissing: 'No rolegroup.jsonc found.',
   liveHint: 'Saved routes apply to new sessions; in-flight sessions are unaffected',
   conflicted: 'Settings changed elsewhere; your draft is kept — discard or reset, then retry',
-  saveFailed: 'Save failed (local validation or host rejection); fix the flagged fields and retry',
+  saveFailed: 'Save failed: fix the flagged fields and retry',
   catalogLoading: 'Loading model catalog…',
   catalogError: 'Failed to load the model catalog',
-  catalogPartial: 'Some providers failed to respond; candidates may be incomplete',
-  routeUnavailable: 'Current route is not in the catalog (kept to avoid silent config loss)',
+  catalogPartial: 'Some providers failed; candidates may be incomplete',
+  routeUnavailable: 'unavailable',
   selectProvider: 'Select provider',
   selectModel: 'Select model',
-  scopeUnavailable: 'The rolegroup settings namespace is unavailable (not served by the host or not writable); editing is disabled',
-  notTakeover: 'This panel has not taken over yet: the effective table comes from rolegroup.jsonc / the built-in table, '
-    + 'and any role not listed below keeps using them. An empty list does not mean "no roles" — add a row (only for the roles you '
-    + 'want to change) and Save to take over; Reset to file config exits takeover. Note that takeover is all-or-nothing: '
-    + 'rolegroup.jsonc then yields entirely, so roles you only defined in jsonc fall back to the built-in table — '
-    + 'add the jsonc rows you want to keep here as well. See /rolegroup doctor for the full table.',
-  takeoverNote: 'This panel has taken over: the effective table is this table with the built-in table filling the gaps; '
-    + 'rolegroup.jsonc yields entirely (roles not listed here fall back to the built-in table, not to jsonc). '
-    + 'See /rolegroup doctor for the full table.',
+  scopeUnavailable: 'Panel unavailable: the settings service is not ready or not writable',
+  // One status line stays visible; the layer semantics live in a collapsed <details> block.
+  statusNotTakeover: 'Active: rolegroup.jsonc / built-in table (not taken over)',
+  statusTakeover: 'Active: this panel (built-in table fills gaps)',
+  emptyNotTakeover: 'No editable roles; add one manually.',
+  emptyTakeover: 'No overrides: every role uses the built-in table.',
+  effectiveLoading: 'Loading the active configuration…',
+  effectiveError: 'Failed to load the active configuration',
+  effectiveErrorHint: 'Retry to load it; avoid saving before it loads, or the file configuration would be overwritten.',
+  retryEffective: 'Retry',
+  prefillHint: 'The active configuration is pre-filled below; saving your changes makes this panel take over.',
+  layerSummary: 'How the layers work',
+  layerNote: 'Precedence: this panel > project rolegroup.jsonc > user rolegroup.jsonc > built-in table. '
+    + 'Saving writes the active table into this panel and takes over the whole layer; Reset to file config '
+    + 'exits takeover. See /rolegroup doctor for the effective table.',
 }
 
 export default { zh, en }

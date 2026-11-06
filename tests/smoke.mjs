@@ -30,6 +30,13 @@ import {
   presetDisplayName,
   presetIdOf,
 } from '../lib/presets.js'
+import { CONFIG_ROUTE_PATH, buildConfigInfo, installConfigInfoRoute } from '../lib/config-info.js'
+import { configFileAddress, openConfigFileInSidebar } from '../src/client/config-file.js'
+import { NAV_ICON_CSS, installSettingsNavIcon, markSettingsNavButton } from '../src/client/settings-nav-icon.js'
+
+// 客户端 controller 的预填 / 「配置文件」按钮会 fetch 宿主接口；单测统一走内存桩，绝不打真实网络。
+const realFetch = globalThis.fetch
+globalThis.fetch = async () => ({ ok: true, json: async () => ({ ok: true, effective: { roles: [] } }) })
 
 let passed = 0
 function ok(label, fn) {
@@ -116,7 +123,7 @@ const BASE_ROWS = [
   { id: 'tool-bash', name: '@deepseek-ai/dsh-tool-bash', disabled: new FakeJsExpr("process.platform === 'win32'") },
   { id: DELEGATION_GROUP_ID, name: 'cordis:group', group: true, config: [{ id: 'tool-subagent', name: '@deepseek-ai/dsh-tool-subagent' }] },
 ]
-const PRESET_ROLE = { toolName: 'analyst', persona: '你是 analyst。', summary: '需求澄清' }
+const PRESET_ROLE = { toolName: 'analyst', provider: 'qwen-token-plan-cn', model: 'qwen3.8-max', persona: '你是 analyst。', summary: '需求澄清' }
 
 ok('presets: 命名口径（v0.6/A1）', () => {
   assert.equal(PRESET_ID_PREFIX, 'rolegroup-')
@@ -124,6 +131,7 @@ ok('presets: 命名口径（v0.6/A1）', () => {
   assert.equal(DELEGATION_GROUP_ID, 'delegation')
   assert.equal(presetIdOf('analyst'), 'rolegroup-analyst')
   assert.equal(presetDisplayName('analyst'), '角色：analyst')
+  assert.equal(presetDisplayName('analyst', 'qwen3.8-max'), '角色：analyst · qwen3.8-max')
 })
 
 ok('presets: cloneEntryList —— 纯对象/数组深拷，JsExpr 实例按引用保留（v0.6/A1）', () => {
@@ -156,8 +164,8 @@ ok('presets: baseRows 非法 / 缺 persona 行时兜底追加（v0.6/A1）', () 
 ok('presets: buildPresetDefinition 精确形状（v0.6/A1）', () => {
   const def = buildPresetDefinition(BASE_ROWS, PRESET_ROLE, 3)
   assert.equal(def.id, 'rolegroup-analyst')
-  assert.equal(def.name, '角色：analyst')
-  assert.equal(def.description, '需求澄清')
+  assert.equal(def.name, '角色：analyst · qwen3.8-max')
+  assert.equal(def.description, '需求澄清 · qwen-token-plan-cn/qwen3.8-max')
   assert.equal(def.order, 203)
   assert.deepEqual(def.plugins.map((r) => r.id), ['persona', 'agent-instructions', 'tool-bash'])
 })
@@ -208,6 +216,7 @@ ok('roleAnnouncement: 包含每个角色与模型 + 0.2.1 委派语义（v0.6/A1
   assert.ok(text.includes('不可再嵌套委派'), '必须保留"不可再嵌套委派"约定')
   assert.ok(text.includes('立即返回'), '必须说明委派立即返回 subagent id')
   assert.ok(text.includes('完成通知') || text.includes('完成时收到通知'), '必须说明完成通知语义')
+  assert.ok(text.includes('description') && text.includes('子任务标题'), '必须要求 description 带模型并说明它会显示为子任务标题')
 })
 
 console.log(`\n${passed} passed`)
@@ -2548,6 +2557,203 @@ await okAsync('build-client: node 侧模拟 __ModuleLoader__ 消费产物——f
     '0.1.7 的 5 元素：settingsScope 已被 configForms 取代')
 })
 
+// --- 「配置文件」查看器：host 侧快照纯函数 + 只读路由 ---
+// 背景（2026-10-21 用户需求）：设置页加「配置文件」按钮，点击显示当前配置信息。
+// 数据必须来自 host（jsonc 文件内容/路径只有 host 读得到）；浏览器侧只渲染快照。
+// 纯函数保证 node 可测；路由安装器在没有 webServer 的宿主上必须安静跳过（红线 1）。
+
+ok('config-info: 面板接管 → active=panel；文件仅展示不生效；来源逐角色标注 panel/builtin', () => {
+  const info = buildConfigInfo({
+    panelEnabled: true,
+    panelRoleNames: ['analyst'],
+    file: { path: '/tmp/rolegroup.jsonc', mtimeMs: 123, text: '{"roles":{}}', error: null },
+    fileRoleNames: ['analyst', 'coder'],
+    effectiveRoles: [
+      { toolName: 'analyst', provider: 'qwen-token-plan-cn', model: 'qwen3.8-max', persona: '分析人格', summary: '需求澄清', reasoningEffort: 'high' },
+      { toolName: 'coder', provider: 'kimi-coding', model: 'k3' },
+      { toolName: 'scout', provider: 'deepseek-official', model: 'deepseek-flash' },
+    ],
+    problems: [],
+  })
+  assert.equal(info.active, 'panel')
+  assert.equal(info.file.active, false, '面板接管时文件只是展示，不得标生效')
+  assert.equal(info.file.path, '/tmp/rolegroup.jsonc')
+  assert.equal(info.file.mtimeMs, 123)
+  assert.equal(info.file.text, '{"roles":{}}')
+  assert.deepEqual(info.effective.roles.map((role) => [role.toolName, role.from]), [
+    ['analyst', 'panel'], ['coder', 'builtin'], ['scout', 'builtin'],
+  ])
+  // 设置页预填需要可选字段（persona/summary/reasoningEffort），快照不得丢。
+  assert.equal(info.effective.roles[0].persona, '分析人格')
+  assert.equal(info.effective.roles[0].summary, '需求澄清')
+  assert.equal(info.effective.roles[0].reasoningEffort, 'high')
+})
+
+ok('config-info: 文件生效 → active=file；文件显式写的角色标 file，其余 builtin', () => {
+  const info = buildConfigInfo({
+    panelEnabled: false,
+    panelRoleNames: [],
+    file: { path: '/tmp/rolegroup.jsonc', mtimeMs: 456, text: '{}', error: null },
+    fileRoleNames: ['coder'],
+    effectiveRoles: [
+      { toolName: 'coder', provider: 'kimi-coding', model: 'k3' },
+      { toolName: 'analyst', provider: 'qwen-token-plan-cn', model: 'qwen3.8-max' },
+    ],
+    problems: ['示例问题'],
+  })
+  assert.equal(info.active, 'file')
+  assert.equal(info.file.active, true)
+  assert.deepEqual(info.effective.roles.map((role) => [role.toolName, role.from]), [
+    ['coder', 'file'], ['analyst', 'builtin'],
+  ])
+  assert.deepEqual(info.effective.problems, ['示例问题'])
+})
+
+ok('config-info: 无配置文件 → active=builtin、file=null、全部内置', () => {
+  const info = buildConfigInfo({
+    panelEnabled: false,
+    panelRoleNames: [],
+    file: null,
+    fileRoleNames: [],
+    effectiveRoles: [{ toolName: 'scout', provider: 'deepseek-official', model: 'deepseek-flash' }],
+    problems: [],
+  })
+  assert.equal(info.active, 'builtin')
+  assert.equal(info.file, null)
+  assert.deepEqual(info.effective.roles.map((role) => role.from), ['builtin'])
+})
+
+ok('config-info: 文件解析失败 → active=builtin；file.error 透出且不标生效；全部内置', () => {
+  const info = buildConfigInfo({
+    panelEnabled: false,
+    panelRoleNames: [],
+    file: { path: '/tmp/rolegroup.jsonc', mtimeMs: 789, text: '{ bad', error: 'Unexpected token' },
+    fileRoleNames: ['coder'],
+    effectiveRoles: [{ toolName: 'coder', provider: 'kimi-coding', model: 'k3' }],
+    problems: [],
+  })
+  assert.equal(info.active, 'builtin')
+  assert.equal(info.file.error, 'Unexpected token')
+  assert.equal(info.file.active, false, '解析失败的文件不能标生效')
+  assert.deepEqual(info.effective.roles.map((role) => role.from), ['builtin'])
+})
+
+function makeHttpExchange(method, remoteAddress) {
+  const request = { method, socket: { remoteAddress } }
+  const response = {
+    status: undefined,
+    headers: undefined,
+    body: undefined,
+    writeHead(status, headers) { this.status = status; this.headers = headers },
+    end(body) { this.body = body },
+  }
+  return { request, response }
+}
+
+await okAsync('config-info route: 只读 + 仅本机；GET/HEAD 200、非本机 403、非 GET/HEAD 405；无 webServer 安静跳过', async () => {
+  let route
+  const warns = []
+  const ctx = {
+    inject: (deps, cb) => {
+      assert.deepEqual(deps, ['webServer'], '只软取 webServer，不把它加进静态 inject（headless 必须能加载）')
+      cb({
+        webServer: { register: (registered) => { route = registered; return () => {} } },
+        effect: (fn) => fn(),
+      })
+    },
+  }
+  const log = { info() {}, warn: (message) => warns.push(message) }
+  assert.equal(installConfigInfoRoute(ctx, () => ({
+    active: 'builtin', file: null, effective: { roles: [], problems: [] },
+  }), log), true)
+  assert.ok(route, 'webServer.register 必须被调用')
+  assert.equal(route.kind, 'exact')
+  assert.equal(route.path, CONFIG_ROUTE_PATH)
+  assert.equal(CONFIG_ROUTE_PATH, '/api/dsh-rolegroup/config')
+
+  let exchange = makeHttpExchange('GET', '127.0.0.1')
+  await route.handler(exchange.request, exchange.response)
+  assert.equal(exchange.response.status, 200)
+  assert.equal(exchange.response.headers['cache-control'], 'no-store')
+  const payload = JSON.parse(exchange.response.body)
+  assert.equal(payload.ok, true)
+  assert.equal(payload.active, 'builtin')
+  assert.equal(typeof payload.generatedAt, 'string')
+  assert.deepEqual(payload.effective, { roles: [], problems: [] })
+
+  exchange = makeHttpExchange('HEAD', '::1')
+  await route.handler(exchange.request, exchange.response)
+  assert.equal(exchange.response.status, 200)
+  assert.equal(exchange.response.body, undefined, 'HEAD 不得写 body')
+
+  exchange = makeHttpExchange('GET', '10.0.0.5')
+  await route.handler(exchange.request, exchange.response)
+  assert.equal(exchange.response.status, 403, '非本机请求必须拒绝（绕过 /api 认证层，不向局域网暴露配置）')
+  assert.equal(JSON.parse(exchange.response.body).ok, false)
+
+  exchange = makeHttpExchange('POST', '127.0.0.1')
+  await route.handler(exchange.request, exchange.response)
+  assert.equal(exchange.response.status, 405)
+  assert.equal(exchange.response.headers.allow, 'GET, HEAD')
+
+  // 降级：ctx.inject 缺席 / webServer 缺席都不得抛，也不得注册
+  assert.equal(installConfigInfoRoute({}, () => ({}), log), false)
+  let callbackRan = false
+  installConfigInfoRoute({
+    inject: (deps, cb) => { callbackRan = true; cb({}) },
+  }, () => ({}), log)
+  assert.equal(callbackRan, true, 'webServer 缺席时回调必须执行且安全返回')
+  assert.deepEqual(warns, [], '缺少可选能力属于正常降级，不该 warn')
+})
+
+await okAsync('config-info: apply 真的装上路由，快照按当前生效层返回（假 webServer 集成）', async () => {
+  const tmp = await mkdtemp(join(tmpdir(), 'dsh-rg-config-'))
+  const prevHome = process.env.DSH_HOME
+  process.env.DSH_HOME = tmp
+  let route
+  try {
+    __setTestOverrides({ debounceMs: 1, maxWaitMs: 5 })
+    const fake = makeComposeCtx({
+      injectImpl: (deps, cb) => {
+        // 只应答 webServer；agentPresets 已由 makeComposeCtx 默认就绪，commands 缺失走既有降级
+        if (deps.includes('webServer')) {
+          cb({
+            webServer: { register: (registered) => { route = registered; return () => {} } },
+            effect: (fn) => fn(),
+          })
+        }
+      },
+    })
+    await apply(fake.ctx, makeEntryConfig([], false).config)
+    assert.ok(route, 'apply 必须通过 ctx.inject([webServer]) 注册配置查看路由')
+    assert.equal(route.kind, 'exact')
+    assert.equal(route.path, CONFIG_ROUTE_PATH)
+    const exchange = makeHttpExchange('GET', '127.0.0.1')
+    await route.handler(exchange.request, exchange.response)
+    const payload = JSON.parse(exchange.response.body)
+    assert.equal(payload.ok, true)
+    assert.equal(payload.active, 'builtin', '无 jsonc + 面板未接管 → 内置表')
+    assert.equal(payload.file, null)
+    assert.equal(payload.effective.roles.length, 7, '内置 7 角色必须全部出现在生效表')
+    assert.ok(payload.effective.roles.every((role) => role.from === 'builtin'), JSON.stringify(payload.effective.roles))
+  } finally {
+    __setTestOverrides(undefined)
+    if (prevHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = prevHome
+  }
+})
+
+ok('config-info: 两端端点一致 + host apply 接线（source-level 防漂移）', () => {
+  const hostSrc = readFileSync(fileURLToPath(new URL('../lib/index.js', import.meta.url)), 'utf8')
+  const controllerSrc = readFileSync(fileURLToPath(new URL('../src/client/controller.js', import.meta.url)), 'utf8')
+  const routeSrc = readFileSync(fileURLToPath(new URL('../lib/config-info.js', import.meta.url)), 'utf8')
+  assert.ok(controllerSrc.includes(`'${CONFIG_ROUTE_PATH}'`), '客户端端点必须与 host 路由逐字一致')
+  assert.ok(routeSrc.includes(`'${CONFIG_ROUTE_PATH}'`), 'host 路由路径必须是两端约定的常量')
+  assert.ok(hostSrc.includes('installConfigInfoRoute(ctx, buildConfigInfoSnapshot'), 'apply 必须安装配置查看路由')
+  assert.ok(hostSrc.includes('text: fileText'), '快照必须带上启动时读取的文件原文（保留注释）')
+  assert.ok(controllerSrc.includes('fetchConfigInfo') && controllerSrc.includes('openConfig'), 'controller 必须提供查看器动作与拉取方法')
+})
+
 // --- v0.3 GUI 面板 T4：client controller 纯逻辑（plans/v0.3-gui-panel.md §2.4/§4 T4，v0.3/AC-20..AC-27）---
 // 假 scope 对齐 0.1.7 的 ConfigFormController 契约（`ctx.configForms.get(entryId)` 的返回面：
 // getSnapshot() → {status,value,base,user,revision,writable,mode}；subscribe(cb)→退订；
@@ -2602,7 +2808,10 @@ function makeFakeScope({ value, base, user, revision = 3, writable = true, statu
 
 function makeFakeClientCtx(catalogResult) {
   const calls = []
-  return { calls, remote: { session: { modelCatalog: async () => { calls.push(1); return catalogResult } } } }
+  return {
+    calls,
+    remote: { session: { modelCatalog: async () => { calls.push(1); return catalogResult } } },
+  }
 }
 
 const flushMicrotasks = () => new Promise((r) => setImmediate(r))
@@ -2784,6 +2993,303 @@ await okAsync('controller: addRole/removeRole 增删草稿行；非法行（空 
   assert.equal(proj.dirty, false, '增后又删回必须与生效值一致')
 })
 
+await okAsync('controller: 配置文件按钮——fetch 后把路径交给右侧栏；无文件/右侧栏不可用/HTTP 失败都内联投影（config-viewer/AC-3）', async () => {
+  const section = SECTION7()
+  const makeController = (fetchImpl, openConfigFile) => new RolegroupCardController(
+    makeFakeScope({ value: section, base: SECTION7(), user: undefined }),
+    makeFakeClientCtx({ ok: true, value: { groups: [], failures: [] } }),
+    { fetch: fetchImpl, openConfigFile },
+  )
+  const payloadWithFile = {
+    ok: true,
+    active: 'file',
+    file: { path: '/home/me/.dsh/rolegroup.jsonc', error: null },
+    effective: { roles: [], problems: [] },
+  }
+
+  // ① 成功：fetch → 路径交给 openConfigFile → 返回 true（卡片据此关闭设置弹窗）
+  const calls = []
+  let openedPath
+  const okController = makeController(async (url, options) => {
+    calls.push({ url, options })
+    return { ok: true, json: async () => payloadWithFile }
+  }, (path) => { openedPath = path; return true })
+  const okFace = okController.inject()
+  const opened = await okFace.openConfig()
+  assert.equal(opened, true, '成功打开必须返回 true')
+  assert.equal(openedPath, '/home/me/.dsh/rolegroup.jsonc', '必须把 host 给出的绝对路径交给右侧栏')
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].url, CONFIG_ROUTE_PATH, '端点必须与 host 注册路径一致')
+  assert.equal(calls[0].options.cache, 'no-store')
+  let proj = okFace.hooks.rolegroupCard.getSnapshot()
+  assert.equal(proj.config.status, 'idle')
+  assert.equal(proj.config.error, undefined)
+  assert.equal(proj.config.notice, undefined)
+
+  // ② 无文件：不调用右侧栏，返回 false，留下 noFile notice
+  let called = false
+  const noFileController = makeController(async () => ({
+    ok: true,
+    json: async () => ({ ok: true, active: 'builtin', file: null, effective: { roles: [], problems: [] } }),
+  }), () => { called = true; return true })
+  const noFileFace = noFileController.inject()
+  assert.equal(await noFileFace.openConfig(), false)
+  assert.equal(called, false, '没有配置文件时不得调用右侧栏')
+  proj = noFileFace.hooks.rolegroupCard.getSnapshot()
+  assert.equal(proj.config.status, 'idle')
+  assert.equal(proj.config.notice, 'noFile', '无文件必须留下可显示的 notice')
+
+  // ③ 右侧栏不可用：返回 false + error 投影（卡片内联显示，不弹窗）
+  const sidebarDown = makeController(async () => ({
+    ok: true, json: async () => payloadWithFile,
+  }), () => false)
+  const sidebarFace = sidebarDown.inject()
+  assert.equal(await sidebarFace.openConfig(), false)
+  proj = sidebarFace.hooks.rolegroupCard.getSnapshot()
+  assert.equal(proj.config.status, 'error')
+  assert.ok(proj.config.error.includes('sidebar unavailable'), proj.config.error)
+
+  // ④ HTTP 失败：error 投影带状态码（可行动）
+  const failing = makeController(async () => ({ ok: false, status: 500 }), () => true)
+  const failFace = failing.inject()
+  assert.equal(await failFace.openConfig(), false)
+  proj = failFace.hooks.rolegroupCard.getSnapshot()
+  assert.equal(proj.config.status, 'error')
+  assert.ok(proj.config.error.includes('500'), proj.config.error)
+})
+
+await okAsync('controller: 未接管时用 host 生效表预填——默认有内容、自定义角色可识别、改后保存整表接管（prefill/AC-1）', async () => {
+  const effective = [
+    { toolName: 'analyst', provider: 'qwen-token-plan-cn', model: 'qwen3.8-flash', persona: '分析人格', summary: '需求澄清', reasoningEffort: 'high', from: 'file' },
+    { toolName: 'my_role', provider: 'kimi-coding', model: 'k3', persona: '自定义人格', summary: '自定义职责', from: 'file' },
+  ]
+  const scope = makeFakeScope({ value: { roles: [] }, base: SECTION7(), user: undefined, revision: 3 })
+  const controller = new RolegroupCardController(
+    scope,
+    makeFakeClientCtx({ ok: true, value: { groups: [], failures: [] } }),
+    { fetch: async () => ({ ok: true, json: async () => ({ ok: true, effective: { roles: effective } }) }) },
+  )
+  const face = controller.inject()
+  const unsubscribe = face.hooks.rolegroupCard.subscribe(() => {})
+  await flushMicrotasks()
+  let proj = face.hooks.rolegroupCard.getSnapshot()
+  assert.equal(proj.takeover, false)
+  assert.equal(proj.effective.status, 'ready', '首次展开必须拉取当前生效表')
+  assert.equal(proj.effective.prefilled, true)
+  assert.equal(proj.rows.length, 2, '未接管时默认必须显示当前生效角色，而不是空表')
+  assert.equal(proj.rows[0].persona, '分析人格', '预填必须带 persona')
+  assert.equal(proj.rows[0].reasoningEffort, 'high', '预填必须带 reasoningEffort')
+  assert.equal(proj.rows[0].isCustom, false, '内置角色不是自定义行')
+  assert.equal(proj.rows[1].isCustom, true, 'jsonc 新增角色是自定义行')
+  assert.equal(proj.dirty, false, '预填不得默认置 dirty')
+
+  face.editRole('analyst', 'model', 'qwen3.8-max')
+  proj = face.hooks.rolegroupCard.getSnapshot()
+  assert.equal(proj.dirty, true, '修改预填行必须置 dirty')
+  face.save()
+  await flushMicrotasks()
+  const saved = scope.calls.mutate[0]
+  assert.equal(saved.ops[0].value, true, '保存必须接管')
+  assert.equal(saved.ops[1].value.length, 2, '保存必须把整张生效表写入面板')
+  assert.equal(saved.ops[1].value.find((role) => role.toolName === 'analyst').model, 'qwen3.8-max')
+  assert.equal(saved.ops[1].value.find((role) => role.toolName === 'my_role').provider, 'kimi-coding')
+  unsubscribe()
+})
+
+await okAsync('controller: 预填读取失败 → 错误投影 + 重试；失败时仍可手动新增（prefill/AC-2）', async () => {
+  let fail = true
+  const scope = makeFakeScope({ value: { roles: [] }, base: SECTION7(), user: undefined })
+  const controller = new RolegroupCardController(
+    scope,
+    makeFakeClientCtx({ ok: true, value: { groups: [], failures: [] } }),
+    {
+      fetch: async () => fail
+        ? { ok: false, status: 500 }
+        : { ok: true, json: async () => ({ ok: true, effective: { roles: [{ toolName: 'scout', provider: 'deepseek-official', model: 'deepseek-flash' }] } }) },
+    },
+  )
+  const face = controller.inject()
+  const unsubscribe = face.hooks.rolegroupCard.subscribe(() => {})
+  await flushMicrotasks()
+  let proj = face.hooks.rolegroupCard.getSnapshot()
+  assert.equal(proj.effective.status, 'error')
+  assert.ok(proj.effective.error.includes('500'), proj.effective.error)
+  // 失败不阻断旧行为：仍可手动新增一行（保存前会有明确警示）
+  face.addRole()
+  proj = face.hooks.rolegroupCard.getSnapshot()
+  assert.equal(proj.rows.length, 1)
+  assert.equal(proj.rows[0].toolName, 'role_1')
+  fail = false
+  face.retryEffective()
+  await flushMicrotasks()
+  proj = face.hooks.rolegroupCard.getSnapshot()
+  assert.equal(proj.effective.status, 'ready', '重试必须重新拉取')
+  assert.equal(proj.rows.length, 1, '已有草稿不得被重试静默清空')
+  unsubscribe()
+})
+
+await okAsync('controller: 绝不读 ctx.fetch——cordis 严格属性访问会抛；预填只走 options.fetch/globalThis（回归锁）', async () => {
+  // 真机实测：`this.ctx?.fetch` 会触发 cordis “cannot get property "fetch" without inject”，
+  // 导致预填永远失败。用严格 Proxy 模拟该行为：任何未注入属性访问都抛错。
+  const base = makeFakeClientCtx({ ok: true, value: { groups: [], failures: [] } })
+  const strictCtx = new Proxy(base, {
+    get(target, prop) {
+      if (prop in target) return target[prop]
+      throw new Error(`cannot get property "${String(prop)}" without inject`)
+    },
+  })
+  const scope = makeFakeScope({ value: { roles: [] }, base: SECTION7(), user: undefined })
+  const controller = new RolegroupCardController(scope, strictCtx, {
+    fetch: async () => ({ ok: true, json: async () => ({ ok: true, effective: { roles: [{ toolName: 'scout', provider: 'deepseek-official', model: 'deepseek-flash' }] } }) }),
+  })
+  const face = controller.inject()
+  const unsubscribe = face.hooks.rolegroupCard.subscribe(() => {})
+  await flushMicrotasks()
+  const proj = face.hooks.rolegroupCard.getSnapshot()
+  assert.equal(proj.effective.status, 'ready', '严格 ctx 下预填必须仍可用（不得读 ctx.fetch）')
+  assert.equal(proj.rows.length, 1)
+  unsubscribe()
+})
+
+await okAsync('controller: 推理档位按模型目录校验——非法值标红并拦截保存；切模型清掉不支持的旧档位（reasoning-effort/AC-1）', async () => {
+  const section = SECTION7()
+  const scope = makeFakeScope({ value: section, base: SECTION7(), user: undefined })
+  const ctx = makeFakeClientCtx({
+    ok: true,
+    value: {
+      groups: [{
+        id: 'kimi-coding',
+        name: 'Kimi Coding',
+        models: [
+          { id: 'k3', name: 'K3', reasoning: { efforts: [{ id: 'low', name: 'Low' }, { id: 'high', name: 'High' }, { id: 'max', name: 'Max' }], defaultEffort: 'high' } },
+          { id: 'k3-256k', name: 'K3-256K', reasoning: { efforts: [{ id: 'high', name: 'High' }] } },
+          { id: 'kimi-for-coding', name: 'Kimi For Coding' },
+        ],
+      }],
+      failures: [],
+    },
+  })
+  const controller = new RolegroupCardController(scope, ctx)
+  const face = controller.inject()
+  const unsubscribe = face.hooks.rolegroupCard.subscribe(() => {})
+  await flushMicrotasks()
+  assert.equal(face.hooks.rolegroupCard.getSnapshot().catalog.status, 'ready')
+
+  // 非法档位：行级 invalid + 保存拦截
+  face.editRole('coder', 'reasoningEffort', 'bogus')
+  let proj = face.hooks.rolegroupCard.getSnapshot()
+  let row = proj.rows.find((candidate) => candidate.toolName === 'coder')
+  assert.ok(row.invalidFields.includes('reasoningEffort'), JSON.stringify(row))
+  face.save()
+  await flushMicrotasks()
+  assert.equal(scope.calls.mutate.length, 0, '非法推理档位必须拦截保存')
+
+  // 合法档位 → invalid 清掉
+  face.editRole('coder', 'reasoningEffort', 'max')
+  proj = face.hooks.rolegroupCard.getSnapshot()
+  row = proj.rows.find((candidate) => candidate.toolName === 'coder')
+  assert.ok(!row.invalidFields.includes('reasoningEffort'))
+
+  // 切到只支持 high 的模型：旧档位 max 必须被清掉
+  face.editRole('coder', 'model', 'k3-256k')
+  proj = face.hooks.rolegroupCard.getSnapshot()
+  row = proj.rows.find((candidate) => candidate.toolName === 'coder')
+  assert.equal(row.reasoningEffort, '', '新模型不支持的旧档位必须在切模型时清空')
+
+  // 切到明确不支持推理的模型：档位同样清空
+  face.editRole('coder', 'reasoningEffort', 'high')
+  face.editRole('coder', 'model', 'kimi-for-coding')
+  proj = face.hooks.rolegroupCard.getSnapshot()
+  row = proj.rows.find((candidate) => candidate.toolName === 'coder')
+  assert.equal(row.reasoningEffort, '', '不支持推理的模型必须清空档位')
+  unsubscribe()
+})
+
+ok('settings-nav-icon: 按 label 标记带 svg 的导航按钮；CSS 走 mask；无 document 安全 no-op', () => {
+  const svg = { tagName: 'svg' }
+  const target = { textContent: '角色配置', dataset: {}, firstElementChild: svg }
+  const other = { textContent: '通用设置', dataset: {}, firstElementChild: svg }
+  assert.equal(markSettingsNavButton([other, target], '角色配置'), target)
+  assert.equal(target.dataset.dshRgNav, '')
+  assert.equal(markSettingsNavButton([other], '角色配置'), undefined)
+  assert.ok(NAV_ICON_CSS.includes('button[data-dsh-rg-nav]'))
+  assert.ok(NAV_ICON_CSS.includes('mask'))
+  const dispose = installSettingsNavIcon(() => '角色配置', { document: undefined })
+  dispose()
+})
+
+await okAsync('settings-nav-icon: 注入样式并标记设置导航按钮，dispose 清理（DOM 装饰回归）', async () => {
+  const appended = []
+  const style = { setAttribute() {}, textContent: '', remove() { this.removed = true } }
+  const button = { textContent: '角色配置', dataset: {}, firstElementChild: { tagName: 'svg' } }
+  const doc = {
+    body: {},
+    head: { append(child) { appended.push(child) } },
+    createElement() { return style },
+    querySelectorAll(selector) { return selector === 'button' ? [button] : [button] },
+  }
+  const dispose = installSettingsNavIcon(() => '角色配置', {
+    document: doc,
+    MutationObserver: class { observe() {} disconnect() {} },
+    requestAnimationFrame: (fn) => fn(),
+  })
+  assert.deepEqual(appended, [style])
+  assert.equal(button.dataset.dshRgNav, '')
+  dispose()
+  assert.equal(style.removed, true)
+})
+
+ok('config-file: host 绝对路径 → 右侧栏 Session 文件地址（工作区外保留绝对路径，路径段逐个编码）', () => {
+  assert.equal(
+    configFileAddress('s1', '/home/me/.dsh/rolegroup.jsonc'),
+    'dsh-resource://file/session/s1//home/me/.dsh/rolegroup.jsonc',
+    '绝对路径必须保留前导空段（Session 地址里就是绝对路径）',
+  )
+  assert.equal(
+    configFileAddress('s 1', '/home/me/My Config/rolegroup.jsonc'),
+    'dsh-resource://file/session/s%201//home/me/My%20Config/rolegroup.jsonc',
+    'session id 与路径段都必须逐段编码',
+  )
+  assert.equal(
+    configFileAddress('s1', 'C:\\work\\rolegroup.jsonc'),
+    'dsh-resource://file/session/s1/C:/work/rolegroup.jsonc',
+    'Windows 反斜杠归一为 /，盘符冒号保留',
+  )
+})
+
+ok('config-file: 把路径交给右侧栏——取 mounted sessionId、openResource；缺服务/无 Session/抛错都返回 false', () => {
+  const opened = []
+  const sidebarRight = {
+    mounted: { getSnapshot: () => 'session-1' },
+    openResource: (address) => opened.push(address),
+  }
+  assert.equal(openConfigFileInSidebar(sidebarRight, '/home/me/.dsh/rolegroup.jsonc'), true)
+  assert.deepEqual(opened, ['dsh-resource://file/session/session-1//home/me/.dsh/rolegroup.jsonc'])
+  assert.equal(openConfigFileInSidebar(undefined, '/home/me/.dsh/rolegroup.jsonc'), false, '服务缺席必须降级')
+  assert.equal(openConfigFileInSidebar({ mounted: { getSnapshot: () => undefined }, openResource() {} }, '/x'), false, '无屏上 Session 必须降级')
+  assert.equal(openConfigFileInSidebar({
+    mounted: { getSnapshot: () => 'session-1' },
+    openResource() { throw new Error('no type') },
+  }, '/x'), false, 'openResource 抛错必须降级而不是崩')
+})
+
+ok('client-index: 「配置文件」按钮经 sidebarRight 打开右侧栏，成功后关闭设置弹窗（source-level 接线）', () => {
+  const indexSrc = readFileSync(fileURLToPath(new URL('../src/client/index.js', import.meta.url)), 'utf8')
+  const cardSrc = readFileSync(fileURLToPath(new URL('../src/client/card.jsx', import.meta.url)), 'utf8')
+  const helperSrc = readFileSync(fileURLToPath(new URL('../src/client/config-file.js', import.meta.url)), 'utf8')
+  for (const needle of [
+    "ctx.inject?.(['sidebarRight']",
+    'openConfigFile: (path) => openConfigFileInSidebar(sidebarRight, path)',
+  ]) {
+    assert.ok(indexSrc.includes(needle), `client index 缺少右侧栏接线：${needle}`)
+  }
+  assert.ok(helperSrc.includes('sidebarRight.openResource(configFileAddress(sessionId, path))'),
+    '把地址交给 openResource 的逻辑必须在 config-file.js（node 可测）')
+  assert.ok(cardSrc.includes("props.openConfig().then"), '按钮必须在打开成功后回调（以便关闭设置弹窗）')
+  assert.ok(cardSrc.includes("typeof props.close === 'function'") && cardSrc.includes('props.close()'),
+    '打开成功后必须关闭设置弹窗，才能看到右侧栏')
+})
+
 ok('controller: 零浏览器依赖——controller.js 全文无 document/window/react 字样（v0.3/AC-27）', () => {
   const src = readFileSync(fileURLToPath(new URL('../src/client/controller.js', import.meta.url)), 'utf8')
   assert.ok(!/document|window|react/.test(src), 'controller.js 不得出现 document/window/react')
@@ -2894,6 +3400,52 @@ await okAsync('client-locales: 词典 zh/en key 集 parity 且 card.jsx 每个 t
   }
 })
 
+ok('plugin-meta: 插件市场/插件页的说明来自 locale/{en,zh}.json 的 meta 块，exports/files 必须放行（market-meta/AC-1）', () => {
+  const repoRoot = fileURLToPath(new URL('..', import.meta.url))
+  const pkg = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8'))
+  // dsh 的 readPluginMeta 用 `<pkg>/locale/<lang>.json` 解析本地化标题与说明；exports 不放行则解析失败
+  assert.equal(pkg.exports['./locale/*.json'], './locale/*.json', 'exports 必须导出 locale/*.json')
+  assert.ok(pkg.files.includes('locale'), 'files 必须包含 locale（否则打包漏掉）')
+  assert.ok(typeof pkg.description === 'string' && pkg.description.trim() !== '', 'package.json 必须有回退 description')
+
+  const zh = JSON.parse(readFileSync(join(repoRoot, 'locale/zh.json'), 'utf8'))
+  const en = JSON.parse(readFileSync(join(repoRoot, 'locale/en.json'), 'utf8'))
+  for (const [lang, doc] of [['zh', zh], ['en', en]]) {
+    assert.equal(typeof doc?.meta?.title, 'string', `${lang}.json 必须有 meta.title`)
+    assert.equal(typeof doc?.meta?.description, 'string', `${lang}.json 必须有 meta.description`)
+    assert.ok(doc.meta.title.trim() !== '' && doc.meta.description.trim() !== '', `${lang}.json 的 meta 字段不得为空`)
+  }
+  // 语言不得写串：中文版含 CJK、英文版不含
+  assert.ok(/[\u4e00-\u9fff]/.test(zh.meta.description), 'zh.json 说明必须是中文')
+  assert.equal(/[\u4e00-\u9fff]/.test(en.meta.description), false, 'en.json 说明不得含中文')
+})
+
+// --- 设置页头部：插件名 + 版本号 + GitHub 入口 ---
+// 参考设置页惯例（同生态插件截图）：标题旁标版本号、右上角 GitHub 入口。
+// 版本号的唯一真源是 package.json —— 浏览器 bundle 读不到包文件，只能构建期注入；
+// 这里锁两端：源码直跑时安全回落 + 产物真的内联了真版本。
+await okAsync('client-meta: 版本号唯一真源 = package.json，仓库地址与 package.json 一致，头部三要素进 card（settings-header/AC-1）', async () => {
+  const pkg = JSON.parse(readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8'))
+  const meta = await import(new URL('../src/client/meta.js', import.meta.url))
+  // ① 仓库地址与 package.json 的 repository 同源（同一个地址写两处必然漂移——本断言在防这个）
+  assert.equal(meta.PLUGIN_REPO_URL, pkg.repository.url.replace(/^git\+/, '').replace(/\.git$/, ''),
+    'PLUGIN_REPO_URL 必须与 package.json 的 repository 一致')
+  // ② node 直跑源码没有构建期注入 → 必须安全回落 'dev'（裸引用会 ReferenceError，整条 suite 直接挂）
+  assert.equal(meta.PLUGIN_VERSION, 'dev', '源码直跑必须回落 dev（构建产物的真值由下一条 bundle 断言锁）')
+
+  // ③ 头部三要素：插件名沿用既有 title 词条；版本号/仓库地址不得在 card 里写死
+  const card = readFileSync(fileURLToPath(new URL('../src/client/card.jsx', import.meta.url)), 'utf8')
+  assert.ok(/import \{\s*PLUGIN_REPO_URL,\s*PLUGIN_VERSION\s*\} from '\.\/meta\.js'/.test(card),
+    "card.jsx 必须从 './meta.js' 取版本号与仓库地址")
+  assert.ok(card.includes('`v${PLUGIN_VERSION}`'), '头部必须渲染 v<version>（版本号来自构建注入）')
+  assert.ok(/<h2 className="dsh-rg-title">\{t\('title'\)\}<\/h2>/.test(card),
+    '头部标题必须是插件名（t(title)），不得写死')
+  assert.ok(card.includes('href={PLUGIN_REPO_URL}'), 'GitHub 入口必须链接到仓库地址')
+  assert.ok(/target="_blank"/.test(card) && /rel="noreferrer"/.test(card),
+    'GitHub 入口必须新窗口打开且带 rel="noreferrer"')
+  assert.ok(/t\('githubAria'\)/.test(card), 'GitHub 入口须有可访问名（t(githubAria)）')
+})
+
 ok('controller: takeover 投影随 host 的 enabled 位变化（v0.5/AC-14）', () => {
   const section = SECTION7()
   const off = new RolegroupCardController(makeFakeScope({ value: section, base: section }), IDLE_CTX())
@@ -2915,33 +3467,62 @@ ok('client-card: 必须按 props.view 分流——summary 只渲染一行，page
   assert.ok(/props\.view\s*===\s*'summary'\s*\)\s*return\s+t\(/.test(card), 'summary 分支必须 return t(...)（不得渲染表单）')
 })
 
-await okAsync('client-card: 未接管时必须给出说明（"没有默认角色" 困惑回归锁）', async () => {
+await okAsync('client-card: 未接管 → 一行状态 + 空态引导；长层级说明收进折叠块（信息密度回归锁）', async () => {
+  // 2026-10-21 用户反馈：面板里整段「优先级 / 空白≠没有角色 / 整层让位」太长，直接用户不会看。
+  // 新结构：可见文案只留一行状态 + 空态引导；层级语义放进默认收起的 <details>，完整版在 README §5。
   const card = readFileSync(fileURLToPath(new URL('../src/client/card.jsx', import.meta.url)), 'utf8')
-  assert.ok(card.includes('notTakeover'), 'card.jsx 必须在未接管时渲染 notTakeover 说明')
-  const { zh, en } = await import(new URL('../src/client/locales.js', import.meta.url))
-  assert.ok(zh.notTakeover && en.notTakeover, 'notTakeover 词条 zh/en 必须都有')
-})
-
-await okAsync('client-card: **已**接管时也必须给出说明——jsonc 整层让位（"以为 jsonc 还在生效" 困惑回归锁）', async () => {
-  // 2026-10-15：接管后原先什么都不显示，而用户很容易以为"我只改了 scout，coder 的 jsonc 覆盖还在"
-  // ——实际上 jsonc 整层让位、coder 回落内置表。两个分支都必须把层语义说清。
-  const card = readFileSync(fileURLToPath(new URL('../src/client/card.jsx', import.meta.url)), 'utf8')
-  assert.ok(card.includes('takeoverNote'), 'card.jsx 必须在已接管时渲染 takeoverNote 说明')
-  assert.ok(/state\.takeover\s*\?/.test(card), 'takeoverNote 必须挂在 state.takeover 分支上')
   const { zh, en } = await import(new URL('../src/client/locales.js', import.meta.url))
   for (const [name, dict] of [['zh', zh], ['en', en]]) {
-    assert.ok(typeof dict.takeoverNote === 'string' && dict.takeoverNote !== '', `${name}.takeoverNote 必须存在且非空`)
+    for (const key of ['statusNotTakeover', 'statusTakeover', 'emptyNotTakeover', 'emptyTakeover', 'layerSummary', 'layerNote']) {
+      assert.ok(typeof dict[key] === 'string' && dict[key] !== '', `${name}.${key} 必须存在且非空`)
+    }
+    // 旧的整段说明词条必须删除——防止以后又把长段落加回页面
+    assert.ok(!Object.hasOwn(dict, 'notTakeover') && !Object.hasOwn(dict, 'takeoverNote'),
+      `${name} 词典不得保留整段说明词条（notTakeover / takeoverNote）`)
   }
-  assert.ok(zh.takeoverNote.includes('整层让位') && zh.notTakeover.includes('整层'),
-    '中文词典两个分支都必须说清「整层」语义')
-  assert.ok(/yields entirely/i.test(en.takeoverNote) && /yields entirely/i.test(en.notTakeover),
-    '英文词典两个分支都必须说清 all-or-nothing（yields entirely）语义')
+  // 一行状态挂在 takeover 分支上；空态也分两种模式
+  assert.ok(/state\.takeover \? t\('statusTakeover'\) : t\('statusNotTakeover'\)/.test(card),
+    '状态行必须按 takeover 分支渲染，且只渲染一行')
+  assert.ok(card.includes("t('emptyTakeover')") && card.includes("t('emptyNotTakeover')"),
+    '空表必须给出空态引导（两种模式各一句）')
+  // 常驻描述行不得再塞优先级链（2026-10-21 用户：描述太长；优先级属于折叠说明/README）
+  assert.ok(!zh.description.includes('优先级') && !/Precedence/i.test(en.description),
+    `常驻描述行不得再含优先级链：zh=${zh.description} / en=${en.description}`)
+  // 长层级说明只在 <details> 折叠块内，默认不占版面
+  assert.ok(/<details className="dsh-rg-layer">/.test(card), '层级说明必须是 <details> 折叠块')
+  assert.ok(card.includes("t('layerNote')"), '折叠块内必须承载完整层级说明')
+  // 信息没有丢：优先级链 / 整层让位 / doctor 仍在折叠说明里
+  assert.ok(zh.layerNote.includes('优先级') && zh.layerNote.includes('整层') && zh.layerNote.includes('/rolegroup doctor'),
+    `中文折叠说明须保留优先级/整层/doctor：${zh.layerNote}`)
+  assert.ok(/Precedence/.test(en.layerNote) && /whole layer|yields/i.test(en.layerNote) && en.layerNote.includes('/rolegroup doctor'),
+    `英文折叠说明须保留优先级/整层/doctor：${en.layerNote}`)
+})
+
+await okAsync('client-card: 已接管 → 状态行与空态都切到接管语义（"以为 jsonc 还在生效" 回归锁）', async () => {
+  // 2026-10-15：接管后必须明确「生效表 = 本表 + 内置表补底、jsonc 整层让位」，
+  // 否则用户会以为只写在 jsonc 里的角色还在沿用。现在该语义由状态行 + 折叠说明共同承载。
+  const card = readFileSync(fileURLToPath(new URL('../src/client/card.jsx', import.meta.url)), 'utf8')
+  const { zh, en } = await import(new URL('../src/client/locales.js', import.meta.url))
+  assert.ok(zh.statusTakeover.includes('本面板') && zh.statusTakeover.includes('内置表'), zh.statusTakeover)
+  assert.ok(/this panel/i.test(en.statusTakeover) && /built-in table/i.test(en.statusTakeover), en.statusTakeover)
+  assert.ok(zh.emptyTakeover.includes('内置表'), zh.emptyTakeover)
+  assert.ok(/built-in table/i.test(en.emptyTakeover), en.emptyTakeover)
+  // 接管态用实心状态点（.dsh-rg-statusOn）区分；未接管不带该类
+  assert.ok(/state\.takeover \? ' dsh-rg-statusOn' : ''/.test(card), '状态点必须只在接管态点亮')
 })
 
 ok('client-card: card.jsx 全文无硬编码 CJK——所有文案走 t()（v0.3/AC-28）', () => {
   const card = readFileSync(fileURLToPath(new URL('../src/client/card.jsx', import.meta.url)), 'utf8')
   const hits = card.match(/[一-鿿]/g)
   assert.equal(hits, null, `card.jsx 不得出现 CJK 字符（命中 ${hits?.length} 处，如 ${hits?.slice(0, 5)?.join('')}）——文案一律走 t()`)
+})
+
+ok('client-card: 去掉设置页外框，角色列表不设固定滚动高度——滚动交给设置页（layout/AC-1）', () => {
+  const card = readFileSync(fileURLToPath(new URL('../src/client/card.jsx', import.meta.url)), 'utf8')
+  assert.ok(!/\.dsh-rg-card\{[^}]*border/.test(card), 'dsh-rg-card 不得再有外框')
+  assert.ok(!/\.dsh-rg-card\{[^}]*padding/.test(card), 'dsh-rg-card 不得再留外框内边距')
+  assert.ok(!/\.dsh-rg-rows\{[^}]*max-height/.test(card), '角色列表不得再设固定高度')
+  assert.ok(!/\.dsh-rg-rows\{[^}]*overflow/.test(card), '角色列表不得再套一层滚动')
 })
 
 await okAsync('client-bundle: 重建产物仍满足 wrapper 形状且内联 v0.4 注册痕迹（v0.4/AC-17）', async () => {
@@ -2966,13 +3547,258 @@ await okAsync('client-bundle: 重建产物仍满足 wrapper 形状且内联 v0.4
   }
 })
 
+// --- 设置页头部：构建产物的版本号必须来自 package.json ---
+// 上一条用例刚重建过产物。若忘了在 scripts/build-client.mjs 里接 esbuild define，
+// 产物只会含 `typeof __ROLEGROUP_VERSION__` / 'dev'，设置页头部就会显示 vdev。
+ok('client-bundle: 头部版本号由构建期 define 注入（package.json 唯一真源，产物不得回落 dev）', () => {
+  const pkg = JSON.parse(readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8'))
+  const bundle = readFileSync(fileURLToPath(new URL('../lib/client.js', import.meta.url)), 'utf8')
+  assert.ok(bundle.includes(JSON.stringify(pkg.version)),
+    `产物必须内联 package.json 的版本号 ${pkg.version}——否则设置页头部会显示 vdev`)
+  assert.ok(bundle.includes('https://github.com/zhouxnsz/dsh-rolegroup'), '产物必须内联 GitHub 仓库地址')
+  assert.ok(bundle.includes('dsh-rg-action'), '产物必须内联头部动作按钮样式（GitHub / 配置文件共用）')
+  assert.ok(bundle.includes('dsh-resource://file/'), '产物必须内联右侧栏文件地址前缀')
+  assert.ok(bundle.includes('sidebarRight'), '产物必须内联右侧栏服务接线（按钮要落到右侧栏）')
+  assert.ok(bundle.includes(CONFIG_ROUTE_PATH), '产物必须内联配置查看接口路径')
+})
+
+// --- 设置页头部：真实产物的渲染文本 ---
+// 字符串断言只能证明「产物里出现了版本号」，不能证明「组件把它渲染到了头部」。
+// 这里模拟 __ModuleLoader__ 消费真实产物（同 v0.3/AC-18 的加载方式）+ 最小 jsx-runtime，
+// 直接调用注册出来的组件并遍历渲染树，钉死标题/版本号/GitHub 入口的**渲染文本与属性**。
+await okAsync('client-bundle: 真实产物的头部渲染出「角色配置 v<版本> + GitHub 入口」（settings-header/AC-2）', async () => {
+  const pkg = JSON.parse(readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8'))
+  const bundle = readFileSync(fileURLToPath(new URL('../lib/client.js', import.meta.url)), 'utf8')
+  let captured
+  new Function('window', bundle)({ __ModuleLoader__: { load(r) { captured = r } } })
+  assert.ok(captured, 'window.__ModuleLoader__.load 未被调用')
+  // 最小 jsx-runtime 桩：把 JSX 调用变成可遍历的 { type, props } 树。
+  const jsx = (type, props) => ({ type, props: props ?? {} })
+  // 组件只用到 useEffect（Escape 关闭弹窗）；node 里 window 不存在 → 回调安全返回。
+  const stubRequire = (name) => name === 'react/jsx-runtime'
+    ? { jsx, jsxs: jsx, Fragment: 'Fragment' }
+    : { __stub: name }
+  const client = captured.factory(stubRequire)
+
+  // 假 ctx：让 apply 走完 whileServed → slots.inject → 动态加载 card → slots.register 的完整链。
+  const section = rolesToSection(mergeRoles(undefined).roles)
+  const scope = {
+    getSnapshot: () => ({ status: 'ready', value: section, base: section, user: undefined, revision: 1, writable: true, mode: 'host' }),
+    subscribe: () => () => {},
+  }
+  const { zh } = await import(new URL('../src/client/locales.js', import.meta.url))
+  let registered
+  let injectCb
+  client.apply({
+    locale: { register() {}, bind: () => (key) => zh[key] },
+    effect: (fn) => { const disposer = fn(); return typeof disposer === 'function' ? disposer : () => {} },
+    configForms: {
+      get: () => scope,
+      whileServed: (namespaces, register) => { register(new Set(namespaces)); return () => {} },
+    },
+    slots: {
+      inject: (name, cb) => { injectCb = cb },
+      register: (options, component) => { registered = { options, component } },
+    },
+    remote: { session: { modelCatalog: async () => ({ ok: true, value: { groups: [], failures: [] } }) } },
+  })
+  await injectCb()
+  assert.ok(registered, 'inject 回调必须注册设置页组件')
+
+  // 渲染一次卡片：投影桩只提供组件读取的字段；返回可遍历的 { type, props } 节点表。
+  const cardActions = { openConfig() {}, closeConfig() {}, refreshConfig() {} }
+  const renderCard = (projection) => {
+    const tree = registered.component({
+      t: (key) => zh[key],
+      view: 'page',
+      useRolegroupCard: (selector) => selector(projection),
+      editRole() {}, addRole() {}, removeRole() {}, save() {}, discard() {}, resetToBase() {}, retryCatalog() {},
+      openConfig: cardActions.openConfig, closeConfig: cardActions.closeConfig, refreshConfig: cardActions.refreshConfig,
+    })
+    const nodes = []
+    const walk = (node) => {
+      if (node === null || typeof node !== 'object') return
+      // 嵌套数组（条件 + map 的常见形状）必须逐项展开，否则深层 option 不在节点表里。
+      if (Array.isArray(node)) { for (const child of node) walk(child); return }
+      // 函数组件（GitHubMark / FileMark）按 React 语义展开。
+      if (typeof node.type === 'function') {
+        walk(node.type(node.props))
+        return
+      }
+      nodes.push(node)
+      const children = node.props?.children
+      if (Array.isArray(children)) for (const child of children) walk(child)
+      else walk(children)
+    }
+    walk(tree)
+    return nodes
+  }
+  const baseProjection = {
+    available: true, writable: true, takeover: false, dirty: true, saving: false,
+    failed: false, conflicted: false, rows: [],
+    catalog: { status: 'idle', groups: [], partial: false }, basePresent: true,
+    effective: { required: true, status: 'ready', error: undefined, prefilled: true },
+    config: { status: 'idle', error: undefined, notice: undefined },
+  }
+  const nodes = renderCard(baseProjection)
+  const textOf = (node) => node?.props?.children
+  const collectTexts = (node, out = []) => {
+    if (node === null || node === undefined || typeof node === 'boolean') return out
+    if (typeof node === 'string' || typeof node === 'number') { out.push(String(node)); return out }
+    if (typeof node !== 'object') return out
+    const children = node.props?.children
+    if (Array.isArray(children)) for (const child of children) collectTexts(child, out)
+    else collectTexts(children, out)
+    return out
+  }
+  /** 收集一整份渲染节点表的文本（节点表是数组，collectTexts 不能直接吃数组）。 */
+  const textsOfNodes = (nodeList) => nodeList.flatMap((node) => collectTexts(node))
+
+  const title = nodes.find((node) => node.type === 'h2')
+  assert.equal(title?.props?.children, zh.title, '头部标题必须渲染词典 title（角色配置）')
+  const version = nodes.find((node) => node.type === 'span' && typeof node.props?.children === 'string'
+    && node.props.children.startsWith('v'))
+  assert.equal(version?.props?.children, `v${pkg.version}`, '头部必须渲染 v<package.json version>')
+  const repo = nodes.find((node) => node.type === 'a')
+  assert.ok(repo, '头部必须渲染 GitHub 链接')
+  assert.equal(repo.props.href, pkg.repository.url.replace(/^git\+/, '').replace(/\.git$/, ''),
+    'GitHub 链接必须指向 package.json 的仓库')
+  assert.equal(repo.props.target, '_blank')
+  assert.equal(repo.props.rel, 'noreferrer')
+  assert.equal(repo.props['aria-label'], zh.githubAria, 'GitHub 链接的可访问名必须走词典')
+  assert.ok(nodes.some((node) => node.type === 'span' && node.props?.children === zh.github),
+    'GitHub 链接必须渲染 GitHub 文案')
+  assert.ok(nodes.some((node) => node.props?.className === 'dsh-rg-dirty'),
+    '脏标记必须与 GitHub 入口同处头部动作区（dirty=true 时渲染）')
+  // 头部动作区必须同时有「配置文件」按钮与 GitHub 链接
+  const actions = nodes.find((node) => node.props?.className === 'dsh-rg-headActions')
+  const actionTexts = collectTexts(actions)
+  assert.ok(actionTexts.includes(zh.configFile), `头部必须有「配置文件」按钮：${JSON.stringify(actionTexts)}`)
+  assert.ok(actionTexts.includes(zh.github), '头部必须保留 GitHub 链接')
+  const configButton = nodes.find((node) => node.type === 'button'
+    && collectTexts(node).includes(zh.configFile))
+  assert.ok(configButton, '「配置文件」必须是可点击按钮')
+  assert.equal(typeof configButton.props.onClick, 'function', '按钮必须绑定点击处理（openConfig）')
+  assert.equal(configButton.props.disabled, false, '空闲态按钮必须可点击')
+
+  // 未接管：可见文案只有一行状态 + 空态引导；长层级说明必须在默认收起的 <details> 里。
+  assert.ok(nodes.some((node) => textOf(node) === zh.statusNotTakeover), '未接管必须渲染一行状态')
+  assert.ok(nodes.some((node) => textOf(node) === zh.emptyNotTakeover), '空表必须渲染未接管空态引导')
+  const layer = nodes.find((node) => node.type === 'details' && node.props?.className === 'dsh-rg-layer')
+  assert.ok(layer, '层级说明必须是 <details> 折叠块')
+  assert.equal(layer.props.open, undefined, '层级说明默认必须收起（不得默认展开长文）')
+  const layerTexts = collectTexts(layer)
+  assert.ok(layerTexts.includes(zh.layerSummary), '折叠块必须有摘要文案')
+  assert.ok(layerTexts.includes(zh.layerNote), '完整层级说明必须在折叠块内')
+
+  // 已接管：同一组件换投影后，状态行与空态都切到接管语义。
+  const takeoverNodes = renderCard({ ...baseProjection, takeover: true, effective: { required: false, status: 'ready', error: undefined, prefilled: false } })
+  assert.ok(takeoverNodes.some((node) => textOf(node) === zh.statusTakeover), '接管态必须渲染接管状态行')
+  assert.ok(takeoverNodes.some((node) => textOf(node) === zh.emptyTakeover), '接管态空表必须渲染接管空态')
+  assert.ok(!takeoverNodes.some((node) => textOf(node) === zh.statusNotTakeover), '接管态不得残留未接管文案')
+  assert.ok(takeoverNodes.some((node) => node.props?.className === 'dsh-rg-status dsh-rg-statusOn'),
+    '接管态状态行必须带点亮类')
+
+  // —— 未接管预填：有行时给出「已填入当前生效配置」提示；加载中禁用编辑；失败可重试 ——
+  const prefillNodes = renderCard({
+    ...baseProjection,
+    rows: [{
+      toolName: 'analyst', provider: 'qwen-token-plan-cn', model: 'qwen3.8-flash',
+      reasoningEffort: '', persona: '分析人格', summary: '需求澄清', isCustom: false, invalidFields: [],
+    }],
+  })
+  assert.ok(textsOfNodes(prefillNodes).includes(zh.prefillHint), '预填有行时必须提示已填入当前生效配置')
+
+  const effectiveLoadingNodes = renderCard({
+    ...baseProjection,
+    rows: [],
+    effective: { required: true, status: 'loading', error: undefined, prefilled: false },
+  })
+  assert.ok(textsOfNodes(effectiveLoadingNodes).includes(zh.effectiveLoading), '预填加载中必须给出内联提示')
+  assert.ok(!textsOfNodes(effectiveLoadingNodes).includes(zh.emptyNotTakeover), '加载中不得显示空表引导')
+  const loadingAdd = effectiveLoadingNodes.find((node) => node.type === 'button' && textsOfNodes([node]).includes(zh.addRole))
+  assert.equal(loadingAdd.props.disabled, true, '预填加载中必须禁用编辑按钮')
+
+  const effectiveErrorNodes = renderCard({
+    ...baseProjection,
+    rows: [],
+    effective: { required: true, status: 'error', error: 'HTTP 500', prefilled: false },
+  })
+  const effectiveErrorTexts = textsOfNodes(effectiveErrorNodes)
+  assert.ok(effectiveErrorTexts.includes(zh.effectiveError), '预填失败必须给出内联错误')
+  assert.ok(effectiveErrorTexts.includes(' (HTTP 500)'), '预填失败必须带细节')
+  assert.ok(effectiveErrorTexts.includes(zh.effectiveErrorHint), '预填失败必须给出保存警示')
+  const retryButton = effectiveErrorNodes.find((node) => node.type === 'button' && textsOfNodes([node]).includes(zh.retryEffective))
+  assert.ok(retryButton, '预填失败必须提供重试按钮')
+
+  // —— 推理档位：目录声明 efforts 时渲染 select，默认项显示模型默认档位；不支持时禁用 ——
+  const effortRow = {
+    toolName: 'coder', provider: 'kimi-coding', model: 'k3', reasoningEffort: '',
+    persona: '', summary: '', isCustom: false, invalidFields: [],
+  }
+  const effortCatalog = {
+    status: 'ready', partial: false,
+    groups: [{
+      id: 'kimi-coding',
+      name: 'Kimi Coding',
+      models: [{
+        id: 'k3',
+        name: 'K3',
+        reasoning: {
+          efforts: [{ id: 'low', name: 'Low' }, { id: 'high', name: 'High' }, { id: 'max', name: 'Max' }],
+          defaultEffort: 'high',
+        },
+      }],
+    }],
+  }
+  const effortNodes = renderCard({ ...baseProjection, rows: [effortRow], catalog: effortCatalog })
+  const effortTexts = textsOfNodes(effortNodes)
+  assert.ok(effortTexts.includes(`${zh.reasoningEffortDefault} (high)`), '推理档位默认项必须显示模型默认档位（high）')
+  for (const label of ['Low', 'High', 'Max']) assert.ok(effortTexts.includes(label), `推理档位缺少目录选项：${label}`)
+  assert.ok(effortNodes.some((node) => node.type === 'select' && node.props?.value === ''
+    && textsOfNodes([node]).includes(`${zh.reasoningEffortDefault} (high)`)), '有 efforts 时推理档位必须是 select')
+
+  const unsupportedCatalog = {
+    status: 'ready', partial: false,
+    groups: [{
+      id: 'kimi-coding',
+      name: 'Kimi Coding',
+      models: [{ id: 'kimi-for-coding', name: 'Kimi For Coding' }],
+    }],
+  }
+  const unsupportedNodes = renderCard({
+    ...baseProjection,
+    rows: [{ ...effortRow, model: 'kimi-for-coding' }],
+    catalog: unsupportedCatalog,
+  })
+  const unsupportedInput = unsupportedNodes.find((node) => node.type === 'input'
+    && node.props?.placeholder === zh.reasoningEffortUnsupported)
+  assert.ok(unsupportedInput, '不支持推理的模型必须给出禁用输入 + 提示')
+  assert.equal(unsupportedInput.props.disabled, true)
+
+  // ——「配置文件」按钮：不弹窗；loading / error / noFile 都以页面内联一行呈现 ——
+  const loadingNodes = renderCard({ ...baseProjection, config: { status: 'loading', error: undefined, notice: undefined } })
+  assert.ok(textsOfNodes(loadingNodes).includes(zh.configOpening), 'loading 态必须给出内联提示')
+  const loadingButton = loadingNodes.find((node) => node.type === 'button'
+    && collectTexts(node).includes(zh.configFile))
+  assert.equal(loadingButton.props.disabled, true, 'loading 态按钮必须禁用，防止重复点击')
+
+  const errorNodes = renderCard({ ...baseProjection, config: { status: 'error', error: 'HTTP 500', notice: undefined } })
+  const errorTexts = textsOfNodes(errorNodes)
+  assert.ok(errorTexts.includes(zh.configOpenFailed), 'error 态必须给出内联错误标题')
+  assert.ok(errorTexts.includes(' (HTTP 500)'), 'error 态必须把细节带上')
+  assert.ok(errorTexts.includes(zh.configRestartHint), 'error 态必须给出重启提示')
+
+  const noFileNodes = renderCard({ ...baseProjection, config: { status: 'idle', error: undefined, notice: 'noFile' } })
+  assert.ok(textsOfNodes(noFileNodes).includes(zh.configFileMissing), '无文件必须给出内联 notice')
+})
+
 // --- v0.4 settings 迁移 T5：client apply 时序与门控（plans/v0.4-settings-migration.md D7/T5）---
 // 官方范式（$NM/dsh-client-ui-settings-subagent/lib/client.js:839-846）：卡片注册包在
 // `configForms.whileServed([ns], register)` 里——**host 未 serve 该命名空间时不留痕迹**。
-// 本用例用假 ctx 直接调 apply，钉死「未 serve 不注册 / serve 后恰好注册一次」的门控语义；
-// card 组件本身仍在 inject 回调内异步解析。
-// 纪律：node 里**绝不触发**那个 slots.inject 回调（回调内 await import('./card.jsx') 会撞 JSX 解析）——
-// card.jsx 依旧只许 readFileSync，不得 import。
+// 本条用例用**源码模块**（不是产物）直接调 apply，钉死「未 serve 不注册 / serve 后恰好注册一次」
+// 的门控语义；因此**绝不触发** slots.inject 回调——源码 card.jsx 是 JSX，node 直接 import 会撞
+// 解析错误（产物里它已被编译成 JS，上一条渲染用例走的就是产物）。
 
 await okAsync('client-index 门控时序：未 serve 不注册、serve 后 slots.inject 恰 1 次、use 参数为 id（v0.4/AC-19）', async () => {
   const srcMod = await import(new URL('../src/client/index.js', import.meta.url))
@@ -3012,8 +3838,8 @@ await okAsync('client-index 门控时序：未 serve 不注册、serve 后 slots
   assert.equal(injectCb.constructor.name, 'AsyncFunction', 'inject 回调须为 async 函数')
   // ④ 组件注册延迟到回调内：未触发回调时 slots.register 为 0
   assert.equal(calls.slotsRegister.length, 0, '组件注册须延迟到 inject 回调内')
-  // ⑤ ctx.effect 恰 2 次（词典 + whileServed 门控），标签可辨
-  assert.equal(calls.effect.length, 2, 'ctx.effect 须被调用恰好 2 次（词典 + whileServed 门控）')
+  // ⑤ ctx.effect 恰 3 次（词典 + 导航图标装饰 + whileServed 门控），标签可辨
+  assert.equal(calls.effect.length, 3, 'ctx.effect 须被调用恰好 3 次（词典 + 导航图标装饰 + whileServed 门控）')
   assert.ok(calls.localeRegister.length >= 1, '词典必须注册')
 })
 
@@ -3062,4 +3888,5 @@ await okAsync('源码卫生：src/client/*.{js,jsx} 与 lib/*.js 均不含 NUL �
   assert.equal(bundle.indexOf(0), -1, 'lib/client.js 含字面 NUL 字节')
 })
 
+globalThis.fetch = realFetch
 console.log(`\n${passed} passed`)

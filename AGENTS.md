@@ -8,7 +8,7 @@
 
 dsh 的**角色化委派插件**：角色 = 名字 + 绑定模型 + persona；每个角色 = 一个宿主
 `dsh-tool-subagent` 实例 + 一个**自动生成的 Agent Preset**（persona 住在后者），**角色名即工具名**。
-**要求 dsh ≥ 0.2.1**（0.2.1 起委派工具拒绝内联 persona）。定位与用法见 [README](./README.md) §1。
+**要求 dsh ≥ 0.2.1-rc.1**（0.2.1 系列起委派工具拒绝内联 persona）。定位与用法见 [README](./README.md) §1。
 
 ## 架构地图
 
@@ -20,11 +20,13 @@ dsh 的**角色化委派插件**：角色 = 名字 + 绑定模型 + persona；�
 | `lib/config.js` | settings 条目 `Config`（schemastery）——命名空间的对外契约 |
 | `lib/settings-table.js` | section ↔ 文件配置的双向映射、跨字段校验 |
 | `lib/doctor.js` | 纯逻辑：快照读取/归一化、`auditRoles`、`renderDoctorText` |
+| `lib/config-info.js` | 「配置文件」查看器：当前配置快照纯函数 + 仅本机的只读 web 路由 |
 | `lib/command.js` | `/rolegroup` 命令面 |
 | `lib/startup-scheduler.js` | 剪枝防抖 + 最大等待上限 |
 | `lib/jsonc.js` | 带注释 JSON 解析 |
-| `src/client/` | 浏览器侧：`controller.js`（纯逻辑）、`card.jsx`（渲染）、`locales.js`（词典）、`index.js`（槽位注册） |
+| `src/client/` | 浏览器侧：`controller.js`（纯逻辑）、`card.jsx`（渲染）、`locales.js`（词典）、`meta.js`（版本/仓库元信息，版本由构建注入）、`config-file.js`（配置文件 → 右侧栏 Session 地址）、`settings-nav-icon.js`（设置页导航图标的 scoped CSS 装饰）、`index.js`（槽位注册） |
 | `lib/client.js` | **构建产物**（esbuild 打包 `src/client/`）——**不要手改** |
+| `locale/` | 插件元数据（`en.json` / `zh.json` 的 `meta.title` + `meta.description`）；`exports` 必须放行 `./locale/*.json`、`files` 必须含 `locale`，否则 dsh 的 `readPluginMeta` 解析不到 |
 
 ## 红线（动手前先读）
 
@@ -71,6 +73,20 @@ dsh 的**角色化委派插件**：角色 = 名字 + 绑定模型 + persona；�
 - **preset 健康审计只能在 finalize 做**：在 apply（宿主 row activation）里调 `list()/resolve()` 会触发
   registry `await owner.loader.await()` **自等挂死**；审计异常/超时必须只 warn，且**报告必须写出**。
 - **`maxDepth` 配 `0` 会把顶层委派也挡掉**，不只是禁止套娃。
+- **`reasoningEffort` 不是自由文本**：必须落在模型目录声明的档位内，否则委派预检失败。客户端面板按目录
+  渲染下拉（空 = 模型默认档位），非法值标红并阻止保存，切换模型时清掉新模型不支持的旧值；内置角色
+  刻意留空，让各模型使用默认档位。
+- **子代理 UI 不显示模型**：`dsh-subagent` 的 descriptor 已有 `agentModel`，但
+  `dsh-client-ui-subagent` 没有独立 model chip。插件把模型写进 **Agent Preset 名称**
+  （`presetDisplayName` → header 角色标签显示 `角色：scout · deepseek-flash`）和 **subagent label**
+  （`roleAnnouncement` 要求父模型把 `provider/model` 写进 `description`）；根治仍需上游 UI 显示 descriptor
+  或提供 slot。
+- **设置页导航图标没有 slot 入参**：shell 按 section id 硬编码 `navIcon`，未知 id 一律齿轮。客户端用
+  `settings-nav-icon.js` 给「角色配置」按钮打 `data-dsh-rg-nav`，再用 scoped CSS mask 换成 rolegroup
+  线稿；shell 改结构或浏览器不支持 mask 时自动退回齿轮，不影响设置页。**不要**改成替换 React 子节点。
+- **`engines.dsh` 的 semver 坑**：`>=0.2.1` **不包含** `0.2.1-rc.2`（prerelease 被排除）。插件市场/
+  插件管理器按 `engines.dsh` 判兼容，写错会让插件卡片直接显示「异常」并跳过 meta（连图标都不读）。
+  当前范围是 `>=0.2.1-rc.1`。
 - **配置不热生效**：快照只在启动剪枝终验时写一次；改配置需重启 + 开新会话。
 - **provider 未注册的角色会被剪枝**（不注册、只记进 `invalid[]`）。兜底角色尤其要留意：
   一条被剪枝的兜底路由等于不存在。
@@ -85,6 +101,9 @@ dsh 的**角色化委派插件**：角色 = 名字 + 绑定模型 + persona；�
   `getSnapshot` / `subscribe` / `mutate`。
 - **四层优先级**（**整层择一**，见「容易踩的坑」）：settings 面板 > 项目 `rolegroup.jsonc` >
   用户 `rolegroup.jsonc` > 内置表。
+- **未接管时编辑表由 host 只读快照预填**（`lib/config-info.js` 的 `effective.roles`，含 persona/summary/
+  reasoningEffort）；只有改动后保存才写 `enabled=true` + `roles`（显式接管）。接口不可用时降级为空覆盖表 +
+  手动新增（页内提示，不崩）。
 
 ## 开发流程
 
