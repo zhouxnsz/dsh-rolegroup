@@ -6,7 +6,7 @@ dsh 的角色化委派插件。先定义角色（名字、绑定模型、persona
 角色/类别绑定的思路参考了 [oh-my-openagent](https://github.com/code-yeongyu/oh-my-openagent)（omo），
 详见 §10。
 
-> 版本 **0.6.3** ｜ 要求 dsh **≥ 0.2.1-rc.1** ｜ MIT
+> 版本 **0.7.0** ｜ 要求 dsh **≥ 0.2.1-rc.1**（本机实测 0.2.1-rc.3）｜ MIT
 
 ---
 
@@ -27,6 +27,21 @@ dsh 的角色化委派插件。先定义角色（名字、绑定模型、persona
 
 - 角色就是工具名。`analyst`、`coder`、`scout` 直接出现在工具列表里，委派时不用想模型。
 - 能查。`/rolegroup doctor` 会列出当前每个角色实际用的模型和可用性（见 §6）。
+
+### 边界：我们明确不做什么
+
+在 dsh 这种「一切插件化」的生态里，专注是一种选择，也是一条红线。以下是**刻意不做**的（每条都是
+设计决策，不是尚未实现）：
+
+| 不做 | 为什么 |
+|---|---|
+| **不做编排**（DAG / 多轮协作 / 团队流水线） | 那是官方智能体团队的职责；两套编排会互相踩 |
+| **不注册 MCP server** | 几十个工具会把工具列表、权限面、prompt 预算一起撑大 |
+| **不写项目级状态目录**（`.rolegroup/`） | 我们做的是「路由」，不是「运行时状态机」；状态属于编排层 |
+| **不接管主会话的会话模式（Agent Preset）** | 显式 preset 是**替换**父组合（§4），接管等于替用户做选择 |
+| **不为旧 dsh 线保留双形态分支** | v0.6 起只支持 ≥0.2.1；旧线明确报错而不是半残运行 |
+
+需要编排、状态、MCP 工具链时，请组合其它插件——它们与本插件互不替代。
 
 ## 2. 快速开始
 
@@ -283,7 +298,7 @@ fallback deepseek-official/deepseek-flash ✅       ✅
 ```sh
 npm run link:deps     # 首次 clone 后先跑：建 schemastery 软链
 npm install           # 再装 devDependency esbuild
-npm test              # 离线 smoke test，144 项；pretest 会自动跑 link:deps
+npm test              # 离线 smoke test，148 项；pretest 会自动跑 link:deps
 npm run build:client  # 改了 src/client/** 或 lib/roles.js 后重建 lib/client.js
 ```
 

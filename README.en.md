@@ -7,7 +7,7 @@ instance, so the tool name is the role name.
 The role/category binding is inspired by
 [oh-my-openagent](https://github.com/code-yeongyu/oh-my-openagent) ("omo"); see §10.
 
-> Version **0.6.3** ｜ dsh **≥ 0.2.1-rc.1** ｜ MIT
+> Version **0.7.0** ｜ dsh **≥ 0.2.1-rc.1** (verified on 0.2.1-rc.3) ｜ MIT
 
 ---
 
@@ -32,6 +32,21 @@ Two other things:
   about the model when delegating.
 - You can check the result. `/rolegroup doctor` lists the model each role is actually using, and whether it
   is available (see §6).
+
+### Scope: what we deliberately do not do
+
+In an ecosystem where everything is a plugin, staying focused is a choice and a red line. The items below are
+**deliberate decisions, not missing features**:
+
+| We do not | Why |
+|---|---|
+| **Orchestrate** (DAGs, multi-round collaboration, team pipelines) | That is the official Agent Teams' job; two orchestrators fight each other |
+| **Register an MCP server** | Dozens of tools inflate the tool list, the permission surface, and the prompt budget |
+| **Write a project-level state directory** (`.rolegroup/`) | We route work; we are not a runtime state machine — state belongs to the orchestration layer |
+| **Take over the main session's Agent Preset** | An explicit preset **replaces** the parent composition (§4); taking over means choosing for the user |
+| **Keep dual-shape branches for old dsh lines** | Since v0.6 we support ≥0.2.1 only; older lines get a clear error instead of half-working |
+
+When you need orchestration, state, or an MCP tool chain, compose other plugins — they do not replace this one.
 
 ## 2. Quick start
 
@@ -317,7 +332,7 @@ fails to activate goes into `invalid[]` and is not registered.
 ```sh
 npm run link:deps     # first after cloning: create the schemastery symlink
 npm install           # then install the esbuild devDependency
-npm test              # offline smoke suite, 144 cases; pretest runs link:deps
+npm test              # offline smoke suite, 148 cases; pretest runs link:deps
 npm run build:client  # after editing src/client/** or lib/roles.js
 ```
 
