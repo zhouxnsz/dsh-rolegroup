@@ -34,6 +34,9 @@ const CSS = '.dsh-rg-card{display:grid;gap:10px}'
   + '.dsh-rg-alert{margin:0;font-size:12px;line-height:1.5;color:var(--dsw-alias-label-error)}'
   + '.dsh-rg-catalogError{color:var(--dsw-alias-label-error);display:flex;justify-content:space-between;align-items:center;gap:12px;font-size:12px}'
   + '.dsh-rg-catalogError button{color:var(--dsw-alias-brand-primary);cursor:pointer;background:none;border:0;padding:0;font-size:12px}'
+  + '.dsh-rg-gapNotice{display:flex;justify-content:space-between;align-items:center;gap:12px;font-size:12px;line-height:1.5;color:var(--dsw-alias-state-warn-label)}'
+  + '.dsh-rg-gapNotice button{flex:none;color:var(--dsw-alias-state-warn-label);cursor:pointer;background:none;border:.5px solid var(--dsw-alias-border-l3);border-radius:6px;padding:2px 8px;font-size:12px}'
+  + '.dsh-rg-gapNotice button:disabled{opacity:.5;cursor:default}'
   + '.dsh-rg-rows{display:grid;gap:6px}'
   + '.dsh-rg-row{border:.5px solid var(--dsw-alias-border-l4);border-radius:8px;padding:10px;display:grid;gap:8px}'
   + '.dsh-rg-rowHead{display:flex;align-items:center;gap:12px;min-width:0}'
@@ -321,6 +324,14 @@ export function RolegroupCard(props) {
           <p>{t('layerNote')}</p>
         </details>
       </div>
+      {(state.routeGaps ?? []).length > 0 ? (
+        <div className="dsh-rg-gapNotice" role="status">
+          <span>{state.routeGaps.length} {t('routeGapNotice')}</span>
+          <button type="button" disabled={disabled} onClick={props.fillUnavailableRoutes}>
+            {t('fillRoutes')}
+          </button>
+        </div>
+      ) : null}
       {state.effective?.status === 'loading' || state.effective?.status === 'idle'
         ? <p className="dsh-rg-notice" role="status">{t('effectiveLoading')}</p>
         : null}

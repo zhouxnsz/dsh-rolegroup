@@ -92,6 +92,7 @@ export class RolegroupCardController {
     this.failed = false
     this.conflicted = false
     this.catalogGroups = []        // modelCatalog 原始 groups
+    this.catalogDefault = undefined // modelCatalog.default（部署默认路由，用于一键补齐）
     this.catalogPartial = false
     this.catalogStatus = 'idle'
     // 「配置文件」按钮：status = idle|loading|error；notice = undefined|'noFile'。
@@ -124,6 +125,7 @@ export class RolegroupCardController {
       discard: () => this.discard(),
       resetToBase: () => { this.resetToBase() },
       retryCatalog: () => this.retryCatalog(),
+      fillUnavailableRoutes: () => this.fillUnavailableRoutes(),
       retryEffective: () => this.retryEffective(),
       openConfig: () => this.openConfig(),
     }
@@ -225,6 +227,45 @@ export class RolegroupCardController {
     if (entry === undefined) return undefined
     const efforts = entry.reasoning?.efforts
     return Array.isArray(efforts) ? efforts.map((effort) => effort.id) : []
+  }
+
+  /** 目录就绪时，provider 不在已注册清单里的角色行（「按可用模型补齐」的作用对象）。 */
+  routeGapsOf(rows) {
+    if (this.catalogStatus !== 'ready') return []
+    const registered = new Set(this.catalogGroups.map((group) => group.id))
+    return rows
+      .filter((row) => typeof row.provider === 'string' && row.provider.trim() !== '' && !registered.has(row.provider))
+      .map((row) => ({ toolName: row.toolName, provider: row.provider }))
+  }
+
+  /**
+   * 一键补齐：把 provider 未注册的行改成当前可用路由。
+   * 优先用部署默认路由（modelCatalog.default），否则取第一个可用 provider 的第一个模型。
+   * 只改草稿，用户仍需点「保存」才生效。
+   */
+  fillUnavailableRoutes() {
+    if (!this.editable() || this.catalogStatus !== 'ready') return
+    const gaps = this.routeGapsOf(this.drafts !== undefined ? this.draftRows() : this.effectiveRows())
+    if (gaps.length === 0) return
+    const registered = new Set(this.catalogGroups.map((group) => group.id))
+    let target = this.catalogDefault
+    if (target === undefined || !registered.has(target.provider)) {
+      const group = this.catalogGroups.find((candidate) => (candidate.models ?? []).length > 0)
+      const model = group?.models?.[0]
+      target = group === undefined || model === undefined ? undefined : { provider: group.id, model: model.id }
+    }
+    if (target === undefined) return
+    const drafts = this.beginDraft()
+    for (const gap of gaps) {
+      const row = drafts.get(gap.toolName)
+      if (row === undefined) continue
+      row.provider = target.provider
+      row.model = target.model
+      // 目标模型的推理档位与旧模型无关：清掉，避免带着新模型不支持的档位保存。
+      delete row.reasoningEffort
+    }
+    this.failed = false
+    this.publish()
   }
 
   // --- 编辑动作 ---
@@ -440,6 +481,7 @@ export class RolegroupCardController {
       if (generation !== this.catalogGeneration || this.disposed) return
       if (response && response.ok) {
         this.catalogGroups = response.value?.groups ?? []
+        this.catalogDefault = response.value?.default
         this.catalogPartial = (response.value?.failures ?? []).length > 0
         this.catalogStatus = 'ready'
       } else {
@@ -510,6 +552,8 @@ export class RolegroupCardController {
       conflicted: this.conflicted,
       rows,
       catalog: { status: this.catalogStatus, groups: this.mergedGroups(rows), partial: this.catalogPartial },
+      /** provider 未注册的行（catalog 就绪才计算）。 */
+      routeGaps: this.routeGapsOf(this.drafts !== undefined ? this.draftRows() : rows),
       /** 预填状态：未接管时由 host 快照提供 jsonc / 内置生效表。 */
       effective: {
         /** 未接管且面板层还没有行：编辑必须先等 host 生效表预填到达（否则草稿基准是空表）。 */

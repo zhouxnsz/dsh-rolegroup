@@ -7,7 +7,7 @@ instance, so the tool name is the role name.
 The role/category binding is inspired by
 [oh-my-openagent](https://github.com/code-yeongyu/oh-my-openagent) ("omo"); see §10.
 
-> Version **0.6.1** ｜ dsh **≥ 0.2.1-rc.1** ｜ MIT
+> Version **0.6.3** ｜ dsh **≥ 0.2.1-rc.1** ｜ MIT
 
 ---
 
@@ -95,17 +95,22 @@ After changing code or `rolegroup.jsonc`, restart and open a new session. For pa
 ## 3. Built-in roles
 
 With no configuration, the plugin registers seven roles. The models below are initial values;
-`rolegroup.jsonc` or the panel can override them. What is actually in use is what `/rolegroup doctor` prints.
+`rolegroup.jsonc` or the panel can override them.
+
+The table names models only: one model usually has several routes (subscription plan, pay-as-you-go, gateway),
+and the provider is up to your configuration. The built-in default points at the built-in table's providers (the
+author's subscriptions) — on your machine run `/rolegroup init` to generate routes that actually work, or edit
+them in the panel. Model ids and the effective routes are whatever `/rolegroup doctor` prints.
 
 | Role | Built-in model | Responsibility |
 |---|---|---|
-| `analyst` | `qwen-token-plan-cn/qwen3.8-max` | Requirement clarification, path classification, plan review (do it / how), architecture decisions |
-| `planner` | `kimi-coding/k3` | Plan design: file layout, task breakdown, interface contracts, writing `plans.md` |
-| `coder` | `kimi-coding/k3` | Implementation: TDD red-green-refactor following `plans.md` steps |
-| `reviewer` | `qwen-token-plan-cn/qwen3.8-max` | Closing review: check acceptance criteria against evidence (was it actually done) |
-| `scout` | `deepseek-official/deepseek-flash` | Exploration and bulk search (returns `file:line` evidence) |
-| `scribe` | `qwen-token-plan-cn/qwen3.8-flash` | Documentation backfill, reports, spec maintenance |
-| `fallback` | `deepseek-official/deepseek-flash` | Catch-all for unclassified lightweight tasks |
+| `analyst` | Qwen3.8 Max | Requirement clarification, path classification, plan review (do it / how), architecture decisions |
+| `planner` | Kimi K3 | Plan design: file layout, task breakdown, interface contracts, writing `plans.md` |
+| `coder` | Kimi K3 | Implementation: TDD red-green-refactor following `plans.md` steps |
+| `reviewer` | Qwen3.8 Max | Closing review: check acceptance criteria against evidence (was it actually done) |
+| `scout` | DeepSeek V4.1 Flash | Exploration and bulk search (returns `file:line` evidence) |
+| `scribe` | Qwen3.8 Flash | Documentation backfill, reports, spec maintenance |
+| `fallback` | DeepSeek V4.1 Flash | Catch-all for unclassified lightweight tasks |
 
 Each role is a delegation-tool instance plus an auto-generated Agent Preset. The preset copies your default
 session mode, replaces the persona, and removes the delegation group. That is why Settings → Agent presets
@@ -132,6 +137,7 @@ The plugin looks for config in this order and stops at the first hit:
       "provider": "qwen-token-plan-cn",          // optional; inherits the built-in provider
       "model": "qwen3.8-flash",
       "reasoningEffort": "medium",                // optional; omit to use the model default
+      "fallbackModels": ["deepseek-official/deepseek-flash"], // optional; tried in order when the primary is unavailable
       "persona": "file://./personas/analyst.md",  // optional; file:// link (relative to this file) or inline
       "summary": "Requirement clarification and plan review" // optional; one line
     }
@@ -139,9 +145,34 @@ The plugin looks for config in this order and stops at the first hit:
 }
 ```
 
-The role name is the JSON key. Each role can set `provider`, `model`, `reasoningEffort` (optional), `persona`
-(optional), and `summary` (optional). `reasoningEffort` must be a level the model supports; leave it out to
-use the model default (see §5).
+The role name is the JSON key. Each role can set `provider`, `model`, `reasoningEffort` (optional),
+`fallbackModels` (optional), `persona` (optional), and `summary` (optional). `reasoningEffort` must be a level
+the model supports; leave it out to use the model default (see §5).
+
+### Fallback chains
+
+Every built-in role bound to a provider other than `deepseek-official` carries a fallback chain, so a machine
+without a qwen or Kimi subscription still gets a working table:
+
+```jsonc
+"analyst": {
+  "provider": "qwen-token-plan-cn",
+  "model": "qwen3.8-max",
+  "fallbackModels": ["deepseek-official/deepseek-flash", "deepseek-official/deepseek-v4-pro"]
+}
+```
+
+Built-in chains are **cheap-first** (`deepseek-flash` → `deepseek-v4-pro`); v4-pro is only the last resort when
+flash itself is unavailable. At startup the plugin takes the first route whose provider is registered and whose model is advertised
+(primary first, then the chain). A degraded role is called out in the startup log and by
+`/rolegroup doctor` (`⚠️ analyst: primary … unavailable, using built-in fallback …`).
+
+**Explicit configuration never degrades on its own**: once a role appears in your `rolegroup.jsonc` (or was
+saved from the panel), that route is executed as written. If it is unavailable the role is not registered and
+doctor prints an actionable hint. Add `fallbackModels` to that role yourself if you want a chain.
+
+For now chains are read from the config file only; the Settings panel does not edit them (and a panel save
+takes over the whole layer, so file chains do not carry over).
 
 ### Precedence
 
@@ -164,13 +195,18 @@ To see which layer is active, read the "config source" line from `/rolegroup doc
 
 ### Runtime
 
-- At startup, routes are checked. An unregistered provider means the role is not registered, and the log says
-  what to fix. A model that is not in the available list only produces a warning; the role is still
-  registered, and delegation checks it again.
+- At startup, routes are checked: the first route whose provider is registered and whose model is advertised
+  wins (primary, then the fallback chain). Built-in roles carry chains, so a machine without qwen / Kimi
+  subscriptions still runs; an **explicitly configured role never degrades** — an unregistered provider means
+  it is not registered, with a repair hint in the log and doctor. A model missing from the advertised list
+  only produces a warning; the role is still registered and delegation checks it again.
 - `maxDepth` is 1: the main session can delegate, role subagents cannot. Setting it to 0 also blocks
   top-level delegation.
 - Changes to `rolegroup.jsonc` are not hot-applied; restart and open a new session. Panel saves apply to new
   sessions (see §5).
+- Chains resolve at **startup only**: a dsh role tool fixes its model when it is registered, so a chain picks
+  one route per start rather than switching at runtime like omo's 429 fallback; `llm/adapters-updated` makes
+  the plugin recompose and resolve again.
 - Delegation returns a subagent id immediately. You get a completion notice when the task finishes; no
   polling.
 
@@ -182,6 +218,11 @@ inherited by delegations); express a role's read-only lean in its persona.
 
 Settings → 角色配置 edits roles and model bindings: add or remove roles, change provider/model,
 persona/summary, and reasoning effort. Save, Discard, and Reset to file config are at the bottom.
+
+When some roles name a provider that is not registered on this machine, the panel shows
+"N roles use a provider that is not registered" with a **Fill with available models** button: those rows are
+pointed at the deployment default route (or the first available model when there is no default). Only the draft
+changes — you still click Save.
 
 The panel does not take over by itself. Before takeover it reads the active table (jsonc or built-in) and
 pre-fills the editor. Save becomes available after you change something; saving writes `enabled=true` and the
@@ -209,10 +250,24 @@ install entry.
 
 `/rolegroup doctor` reads the `$DSH_HOME/plugins/dsh-rolegroup/last-startup.json` snapshot and compares it
 with the live llm service. It lists each role's name, bound model, provider, and whether the model is
-available, with repair hints when something is wrong.
+available, with repair hints when something is wrong. When a built-in fallback is in effect it says so
+("primary X unavailable, using built-in fallback Y").
 
 - `/rolegroup doctor`: diagnose.
+- `/rolegroup init`: print a starter config that overrides only the roles whose primary route is unavailable
+  on this machine (nothing is written) and show the active layer (panel / project jsonc / user jsonc / built-in).
+- `/rolegroup init --write`: write the user-level `$DSH_HOME/rolegroup.jsonc`; refuses to overwrite, and
+  **refuses while the panel has taken over or a project-level config exists** — a file written then would not
+  be read.
+- `/rolegroup init --write --project`: write the project-level `<cwd>/.dsh/rolegroup.jsonc`; warns when the
+  user-level file is the active layer and would be shadowed.
+- `/rolegroup init --diff`: list which roles in the existing file would be replaced or dropped (the generated
+  file replaces the whole file).
+- `/rolegroup init --write --force`: overwrite, after backing the existing file up to `<path>.bak-<timestamp>`.
 - Bare `/rolegroup` or an unknown subcommand: print usage.
+
+> On a fresh machine, run `/rolegroup init` first to see which routes actually work, then decide whether to
+> `--write`. The generated file overrides only the unavailable roles and keeps each fallback chain.
 
 Note: pasting text starting with `/` into the GUI composer sends it as a normal message, not a command. Type
 it by hand or pick it from the completion list.
@@ -255,7 +310,7 @@ fails to activate goes into `invalid[]` and is not registered.
 ```sh
 npm run link:deps     # first after cloning: create the schemastery symlink
 npm install           # then install the esbuild devDependency
-npm test              # offline smoke suite, 134 cases; pretest runs link:deps
+npm test              # offline smoke suite, 144 cases; pretest runs link:deps
 npm run build:client  # after editing src/client/** or lib/roles.js
 ```
 
@@ -305,6 +360,28 @@ The subagent UI has no dedicated model chip. Rolegroup puts the model into two e
 Preset name (the header role label reads e.g. `角色：scout · deepseek-flash`) and the delegation `description`
 (the task title, e.g. `Login validation · kimi-coding/k3`). A dedicated model chip requires upstream subagent UI
 support.
+
+**Want an image-understanding role?**
+Custom roles are supported — add one to `rolegroup.jsonc` (or the panel):
+
+```jsonc
+{
+  "roles": {
+    "looker": {
+      "provider": "opencode-go",
+      "model": "qwen3.7-plus",
+      "summary": "Images: screenshots, UI, charts, error shots",
+      "persona": "You are looker, a vision role. Open the given image path with read_image and return a structured description (layout, text, colors, anomalies). Read-only; say when you cannot see clearly instead of guessing.",
+      "fallbackModels": ["deepseek-official/deepseek-flash"]
+    }
+  }
+}
+```
+
+Three catches: the image must be a **file on disk** (the parent puts the path in the brief; the child opens it
+with `read_image`); keep text-only models (e.g. `deepseek-v4-pro`) out of the fallback chain or the degraded
+route cannot see images; the model itself must accept image input (Qwen3.7 Plus / Qwen3.8 Flash / Kimi K3.1 Pro /
+DeepSeek V4.1 Flash all do).
 
 **I switched the session mode (PTC / minimal / creative). Why does the role tool surface stay the same?**
 Role sub-sessions are based on your default mode, not on the per-session mode. If you only use the standard

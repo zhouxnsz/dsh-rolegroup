@@ -6,7 +6,7 @@ dsh 的角色化委派插件。先定义角色（名字、绑定模型、persona
 角色/类别绑定的思路参考了 [oh-my-openagent](https://github.com/code-yeongyu/oh-my-openagent)（omo），
 详见 §10。
 
-> 版本 **0.6.1** ｜ 要求 dsh **≥ 0.2.1-rc.1** ｜ MIT
+> 版本 **0.6.3** ｜ 要求 dsh **≥ 0.2.1-rc.1** ｜ MIT
 
 ---
 
@@ -87,18 +87,21 @@ dsh --profile web --dump-config | grep -A1 dsh-rolegroup   # 应出现 - id: dsh
 
 ## 3. 内置角色
 
-没有任何配置时，插件会注册这 7 个角色。下表是内置初值，可以被 `rolegroup.jsonc` 或面板覆盖；实际绑定
-以 `/rolegroup doctor` 为准。
+没有任何配置时，插件会注册这 7 个角色。下表是内置初值，可以被 `rolegroup.jsonc` 或面板覆盖。
+
+表里只写**模型名称**：同一个模型往往有多条路由（订阅套餐、按量计费、聚合网关），具体 provider 由你的配置
+决定。内置默认绑定指向内置表里的 provider（作者的订阅），在你的机器上可用 `/rolegroup init` 生成一套本机
+可用的路由，或在面板里直接改。模型 ID 与实际生效路由以 `/rolegroup doctor` 为准。
 
 | 角色 | 内置绑定模型 | 职责 |
 |---|---|---|
-| `analyst` | `qwen-token-plan-cn/qwen3.8-max` | 需求澄清、路径分类、方案评审（做不做/怎么做）、架构决策 |
-| `planner` | `kimi-coding/k3` | 计划设计：文件结构、任务拆分、接口契约、`plans.md` 落笔 |
-| `coder` | `kimi-coding/k3` | 编码执行：按 `plans.md` 步骤 TDD 红-绿-重构 |
-| `reviewer` | `qwen-token-plan-cn/qwen3.8-max` | 收口审查：逐项核对验收标准与证据（做没做到） |
-| `scout` | `deepseek-official/deepseek-flash` | 探索定位、批量搜索（返回 `文件:行号` 证据） |
-| `scribe` | `qwen-token-plan-cn/qwen3.8-flash` | 文档回填、报告、spec 维护 |
-| `fallback` | `deepseek-official/deepseek-flash` | 未分类的轻量任务兜底 |
+| `analyst` | Qwen3.8 Max | 需求澄清、路径分类、方案评审（做不做/怎么做）、架构决策 |
+| `planner` | Kimi K3 | 计划设计：文件结构、任务拆分、接口契约、`plans.md` 落笔 |
+| `coder` | Kimi K3 | 编码执行：按 `plans.md` 步骤 TDD 红-绿-重构 |
+| `reviewer` | Qwen3.8 Max | 收口审查：逐项核对验收标准与证据（做没做到） |
+| `scout` | DeepSeek V4.1 Flash | 探索定位、批量搜索（返回 `文件:行号` 证据） |
+| `scribe` | Qwen3.8 Flash | 文档回填、报告、spec 维护 |
+| `fallback` | DeepSeek V4.1 Flash | 未分类的轻量任务兜底 |
 
 每个角色由一个委派工具实例和一个自动生成的 Agent Preset 组成。Preset 复制你默认会话模式的组合，
 换掉 persona，再去掉委派组。所以「设置 → Agent 预设」里会看到 7 个「角色：xxx · 模型」。这些 preset 是自动
@@ -124,6 +127,7 @@ dsh --profile web --dump-config | grep -A1 dsh-rolegroup   # 应出现 - id: dsh
       "provider": "qwen-token-plan-cn",          // 可省略，继承内置表的 provider
       "model": "qwen3.8-flash",
       "reasoningEffort": "medium",                // 可选，留空用模型默认档位
+      "fallbackModels": ["deepseek-official/deepseek-flash"], // 可选，主路由不可用时按顺序试
       "persona": "file://./personas/analyst.md",  // 可选，file:// 外链（相对本文件）或内联字符串
       "summary": "需求澄清与方案评审"             // 可选，一句话职责
     }
@@ -131,8 +135,32 @@ dsh --profile web --dump-config | grep -A1 dsh-rolegroup   # 应出现 - id: dsh
 }
 ```
 
-角色名就是 JSON 的 key。每个角色可以写 `provider`、`model`、`reasoningEffort`（可选）、`persona`
-（可选）、`summary`（可选）。`reasoningEffort` 必须是模型支持的档位；留空就用模型默认（见 §5）。
+角色名就是 JSON 的 key。每个角色可以写 `provider`、`model`、`reasoningEffort`（可选）、
+`fallbackModels`（可选）、`persona`（可选）、`summary`（可选）。`reasoningEffort` 必须是模型支持的档位；
+留空就用模型默认（见 §5）。
+
+### 备用模型链
+
+内置表里，绑定了非 `deepseek-official` 的角色都带一条备用链，所以新机器上没有 qwen / Kimi 订阅时也不会
+整片失效：
+
+```jsonc
+"analyst": {
+  "provider": "qwen-token-plan-cn",
+  "model": "qwen3.8-max",
+  "fallbackModels": ["deepseek-official/deepseek-flash", "deepseek-official/deepseek-v4-pro"]
+}
+```
+
+内置链一律**便宜档优先**（`deepseek-flash` → `deepseek-v4-pro`），v4-pro 只作为 flash 也不可用时的最后兜底。
+启动时按「主路由 → 备用链」的顺序挑第一个 provider 已注册、模型在广告列表的路由；用了备用档会在启动
+日志和 `/rolegroup doctor` 里明确写出来（`⚠️ analyst：主路由 … 不可用，已用内置备用档 …`）。
+
+**显式配置不自动降级**：只要某个角色出现在你的 `rolegroup.jsonc`（或面板保存过），插件就严格按你写的
+路由执行，不会偷偷换成备用档——真不可用时该角色不注册，doctor 给出可执行提示。想让它有备用档，就把
+`fallbackModels` 一并写进那条角色配置。
+
+目前备用链只从配置文件读；设置面板不编辑它（面板保存还会接管整层，链不会跟着搬过去）。
 
 ### 和面板的优先级
 
@@ -152,10 +180,13 @@ dsh --profile web --dump-config | grep -A1 dsh-rolegroup   # 应出现 - id: dsh
 
 ### 运行时
 
-- 启动时检查路由。provider 没注册，这个角色不会被注册，日志里会给出修复提示；模型不在可用列表里，
-  只警告，仍然注册，委派时再校验。
+- 启动时检查路由：按「主路由 → 备用链」挑第一个 provider 已注册、模型在广告列表的路由。内置角色都带链，
+  所以没有 qwen / Kimi 订阅时也能跑；**显式配置的角色不自动降级**，provider 不在册就不注册，日志和
+  doctor 给出修复提示。模型不在可用列表里只警告，委派时再校验。
 - `maxDepth` 是 1：主会话可以委派，角色子代理不能再委派。配成 0 会把顶层委派也挡掉。
 - 改 `rolegroup.jsonc` 不会热生效，需要重启并开新会话。面板保存对新会话生效（见 §5）。
+- 备用链只在**启动期**解析：dsh 的角色工具在注册时就固定了模型，所以链是「启动挑一条」，不是 omo 那种
+  运行时按 429 切换；`llm/adapters-updated` 会让插件重组装并重新解析。
 - 委派会立即返回 subagent id，任务完成后收到通知，不用轮询。
 
 `readonly` 是废弃字段。老配置里如果还写着，会收到迁移提示，但不会生效。只读请用会话级 permission
@@ -166,6 +197,10 @@ persona 表达。
 
 在「设置 → 角色配置」里编辑角色和模型绑定：增删角色、改 provider/model、persona/summary、推理档位，
 底部有保存、放弃、重置为文件配置。
+
+如果某些角色的 provider 在本机未注册，面板顶部会提示「N 个角色的 provider 在本机未注册」，并提供
+「按当前可用模型补齐」：把这几行改成部署默认路由（没有默认路由时取第一个可用模型），只改草稿，
+你仍需点「保存」才生效。
 
 面板不会自动接管。未接管时，它先读取当前生效表（jsonc 或内置表）并预填；你改过之后保存按钮才可用。
 保存会写入 `enabled=true` 和整张表，从此由面板接管。读取失败时，面板降级为空表，可以手动新增，页内
@@ -187,10 +222,22 @@ persona 表达。
 ## 6. 诊断
 
 `/rolegroup doctor` 会读取 `$DSH_HOME/plugins/dsh-rolegroup/last-startup.json` 快照，再和运行时的 llm
-服务比对，逐项列出角色名、绑定模型、provider 和模型是否可用；有异常时附上修复建议。
+服务比对，逐项列出角色名、绑定模型、provider 和模型是否可用；有异常时附上修复建议。内置备用档生效时，
+doctor 会写明「主路由 X 不可用，已用内置备用档 Y」。
 
 - `/rolegroup doctor`：诊断。
+- `/rolegroup init`：按本机**实际可用**的路由，打印一份只覆盖「主路由不可用」角色的起始配置（不落盘），
+  并显示当前生效层（面板 / 项目 jsonc / 用户 jsonc / 内置表）。
+- `/rolegroup init --write`：写入用户级 `$DSH_HOME/rolegroup.jsonc`；已存在则拒绝。
+  **面板已接管或项目级配置存在时会拒绝**——这两种情况下写文件不会生效。
+- `/rolegroup init --write --project`：写入项目级 `<cwd>/.dsh/rolegroup.jsonc`；若当前生效的是用户级配置，
+  会提示新文件将遮蔽它。
+- `/rolegroup init --diff`：显示已有文件里哪些角色会被覆盖、哪些会被丢弃（生成的是整份文件）。
+- `/rolegroup init --write --force`：确认覆盖；覆盖前自动备份为 `<路径>.bak-<时间戳>`。
 - 裸 `/rolegroup` 或未知子命令：显示用法。
+
+> 新机器上第一次用，建议先跑 `/rolegroup init` 看看本机能跑哪些模型组合，再决定是否 `--write`。
+> 生成的配置只覆盖不可用的角色，其余继续走内置表；每条都保留了备用链。
 
 注意：在 GUI 输入框里粘贴以 `/` 开头的文本，会当成普通消息发出去，不会触发命令。请手动输入，或者从
 补全列表里点。
@@ -231,7 +278,7 @@ fallback deepseek-official/deepseek-flash ✅       ✅
 ```sh
 npm run link:deps     # 首次 clone 后先跑：建 schemastery 软链
 npm install           # 再装 devDependency esbuild
-npm test              # 离线 smoke test，134 项；pretest 会自动跑 link:deps
+npm test              # 离线 smoke test，144 项；pretest 会自动跑 link:deps
 npm run build:client  # 改了 src/client/** 或 lib/roles.js 后重建 lib/client.js
 ```
 
@@ -275,6 +322,27 @@ npm run build:client  # 改了 src/client/** 或 lib/roles.js 后重建 lib/clie
 DSH 的子代理页没有独立的模型 chip。本插件把模型写进两个现有字段：Agent Preset 名称（header 的角色标签
 会显示 `角色：scout · deepseek-flash`）和委派 `description`（任务标题，如 `登录校验实现 · kimi-coding/k3`）。
 要像 Agent Teams 那样单独显示模型 chip，需要上游子代理 UI 支持。
+
+**想加一个「看图」角色？**
+插件支持自定义角色，加到 `rolegroup.jsonc`（或面板）即可：
+
+```jsonc
+{
+  "roles": {
+    "looker": {
+      "provider": "opencode-go",
+      "model": "qwen3.7-plus",
+      "summary": "看图：截图、UI、图表、报错画面",
+      "persona": "你是 looker——视觉理解角色。用 read_image 打开给定路径的图片，返回结构化描述（布局、文字、颜色、异常）。只读；看不清就说看不清，不猜。",
+      "fallbackModels": ["deepseek-official/deepseek-flash"]
+    }
+  }
+}
+```
+
+注意三点：图片必须是**磁盘上的文件**（父模型把路径写进任务简报，子会话用 `read_image` 打开）；
+备用链里不要放纯文本模型（例如 `deepseek-v4-pro`），否则降级后看不了图；模型本身要支持图片输入
+（Qwen3.7 Plus / Qwen3.8 Flash / Kimi K3.1 Pro / DeepSeek V4.1 Flash 都可以）。
 
 **我换了会话模式（PTC / 最小 / 创造），角色工具面为什么不变？**
 角色子会话的基底是你的默认模式，不跟随单会话选择的模式。只用标准模式时没有区别。

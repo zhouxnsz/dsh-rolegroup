@@ -5,7 +5,7 @@ import { mkdtemp, mkdir, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { parseJsonc } from '../lib/jsonc.js'
 import { createPruneScheduler } from '../lib/startup-scheduler.js'
@@ -18,6 +18,8 @@ import {
   TOOL_NAME_RE,
   buildInstanceConfig,
   mergeRoles,
+  parseRouteRef,
+  resolveRoleRoute,
   roleAnnouncement,
 } from '../lib/roles.js'
 import {
@@ -31,6 +33,7 @@ import {
   presetIdOf,
 } from '../lib/presets.js'
 import { CONFIG_ROUTE_PATH, buildConfigInfo, installConfigInfoRoute } from '../lib/config-info.js'
+import { buildInitPlan, buildInitPlanFromBuiltins, rolegroupFilePath, writeInitConfig } from '../lib/init.js'
 import { configFileAddress, openConfigFileInSidebar } from '../src/client/config-file.js'
 import { NAV_ICON_CSS, installSettingsNavIcon, markSettingsNavButton } from '../src/client/settings-nav-icon.js'
 
@@ -281,6 +284,26 @@ await okAsync('doctor: readStartupReport 读真实快照副本 → ok + 7 角色
   for (const a of state.anomalies ?? []) {
     assert.ok(!a.includes('readonly'), `旧快照的 readonly 不应被当成异常：${a}`)
   }
+})
+
+await okAsync('doctor: 备用档快照字段透传 + 渲染明确标注主路由不可用（chains/AC-3）', async () => {
+  const report = normalizeReport({
+    time: '2026-11-06T00:00:00.000Z',
+    configSource: null,
+    registered: [
+      { toolName: 'analyst', provider: 'deepseek-official', model: 'deepseek-v4-pro', primary: 'qwen-token-plan-cn/qwen3.8-max', degraded: true },
+      { toolName: 'scout', provider: 'deepseek-official', model: 'deepseek-flash' },
+    ],
+    failed: [], invalid: [], problems: [],
+  })
+  assert.equal(report.registered[0].primary, 'qwen-token-plan-cn/qwen3.8-max')
+  assert.equal(report.registered[0].degraded, true)
+  assert.equal('degraded' in report.registered[1], false, '未降级的角色不得凭空多出 degraded')
+  const audit = auditRoles(report, { providers: ['deepseek-official'], modelsOf: () => ['deepseek-v4-pro', 'deepseek-flash'] })
+  const text = renderDoctorText({ kind: 'ok', path: '/p', report, audit })
+  assert.ok(text.includes('主路由 qwen-token-plan-cn/qwen3.8-max 不可用'), text)
+  assert.ok(text.includes('deepseek-official/deepseek-v4-pro'), '必须写明实际在用的备用档')
+  assert.ok(text.includes('显式配置不做自动降级'), '必须解释为什么配置里的路由没生效')
 })
 
 await okAsync('doctor: normalizeReport 容忍缺字段（v0.5：readonly 已不在快照里）（AC-5）', () => {
@@ -564,6 +587,112 @@ ok('command: parseRolegroupCommand 子命令解析，不做前缀模糊匹配（
   assert.deepEqual(parseRolegroupCommand('--help'), { kind: 'usage' })
   assert.deepEqual(parseRolegroupCommand('-h'), { kind: 'usage' })
   assert.deepEqual(parseRolegroupCommand('help'), { kind: 'usage' })
+  assert.deepEqual(parseRolegroupCommand('init'), { kind: 'init', write: false, force: false, project: false, diff: false })
+  assert.deepEqual(parseRolegroupCommand(' init --write '), { kind: 'init', write: true, force: false, project: false, diff: false })
+  assert.deepEqual(parseRolegroupCommand('init --write --force'), { kind: 'init', write: true, force: true, project: false, diff: false })
+  assert.deepEqual(parseRolegroupCommand('init --force'), { kind: 'init', write: false, force: true, project: false, diff: false })
+  assert.deepEqual(parseRolegroupCommand('init --write --project'), { kind: 'init', write: true, force: false, project: true, diff: false })
+  assert.deepEqual(parseRolegroupCommand('init --diff --write'), { kind: 'init', write: true, force: false, project: false, diff: true })
+  assert.deepEqual(parseRolegroupCommand('init --bogus'), { kind: 'unknown', sub: 'init --bogus' })
+})
+
+// --- /rolegroup init：按本机可用路由生成起始配置（layer 2）---
+ok('init: buildInitPlan —— 主路由全可用时不需要文件；不可用时只覆盖那几条并保留剩余链', () => {
+  const { roles } = mergeRoles(undefined)
+  const allProviders = [...new Set(roles.map((r) => r.provider))]
+  const allModels = (p) => roles.filter((r) => r.provider === p).map((r) => r.model)
+  // ① 全部可用 → 不生成
+  let plan = buildInitPlan({ roles, providers: allProviders, modelsOf: allModels })
+  assert.equal(plan.needsFile, false)
+  assert.deepEqual(plan.entries, [])
+  assert.equal(parseJsonc(plan.text).roles !== undefined, true, '即使无覆盖项也必须是一份合法 JSONC')
+
+  // ② 只有 deepseek → 5 条覆盖，且写的是解析后的路由 + 剩余链
+  plan = buildInitPlanFromBuiltins({ providers: ['deepseek-official'], modelsOf: () => ['deepseek-flash', 'deepseek-v4-pro'] })
+  assert.equal(plan.needsFile, true)
+  assert.deepEqual(plan.entries.map((e) => e.toolName), ['analyst', 'planner', 'coder', 'reviewer', 'scribe'])
+  const analyst = plan.entries[0]
+  assert.equal(analyst.provider, 'deepseek-official')
+  assert.equal(analyst.model, 'deepseek-flash', '内置链便宜档优先：缺 qwen 时先降级到 flash')
+  assert.deepEqual(analyst.fallbackModels, ['deepseek-official/deepseek-v4-pro'], '只保留选中档位之后的链')
+  assert.equal(analyst.primary, 'qwen-token-plan-cn/qwen3.8-max')
+  assert.ok(plan.text.includes('主路由 qwen-token-plan-cn/qwen3.8-max 在本机不可用'), '正文必须解释为什么被覆盖')
+
+  // ③ 生成的文本必须能直接喂回 mergeRoles，且这些角色变成显式（strict）
+  const merged = mergeRoles(parseJsonc(plan.text))
+  assert.deepEqual(merged.problems, [])
+  const strictNames = merged.roles.filter((r) => r.strict).map((r) => r.toolName)
+  assert.deepEqual(strictNames, ['analyst', 'planner', 'coder', 'reviewer', 'scribe'])
+  assert.equal(merged.roles.find((r) => r.toolName === 'analyst').provider, 'deepseek-official')
+
+  // ④ 完全没有可用路由 → 不写条目，只留注释（写空 provider 会让 mergeRoles 跳过整条）
+  plan = buildInitPlan({
+    roles: [{ toolName: 'analyst', provider: 'ghost', model: 'x', fallbackModels: ['ghost2/y'] }],
+    providers: ['deepseek-official'],
+    modelsOf: () => ['deepseek-flash'],
+  })
+  assert.deepEqual(plan.entries, [])
+  assert.equal(plan.unresolved.length, 1)
+  assert.ok(plan.text.includes('⚠️ analyst：没有可用路由'), plan.text)
+  assert.deepEqual(parseJsonc(plan.text).roles, {}, '无条目时 roles 必须是空对象')
+})
+
+ok('init: rolegroupFilePath 与 writeInitConfig —— DSH_HOME 覆盖、默认不覆盖已有文件、--force 才覆盖', async () => {
+  assert.equal(rolegroupFilePath({ DSH_HOME: '/tmp/x' }, '/home/u'), '/tmp/x/rolegroup.jsonc')
+  assert.equal(rolegroupFilePath({}, '/home/u'), '/home/u/.dsh/rolegroup.jsonc')
+  assert.equal(rolegroupFilePath({ DSH_HOME: '~/custom' }, '/home/u'), '/home/u/custom/rolegroup.jsonc')
+
+  const tmp = await mkdtemp(join(tmpdir(), 'dsh-rg-init-'))
+  const path = join(tmp, 'rolegroup.jsonc')
+  const first = await writeInitConfig(path, '{ "roles": {} }\n')
+  assert.equal(first.written, true)
+  const second = await writeInitConfig(path, '{ "roles": { "x": {} } }\n')
+  assert.deepEqual(second, { written: false, reason: 'exists' })
+  assert.equal(readFileSync(path, 'utf8'), '{ "roles": {} }\n', '默认不得覆盖用户已有配置')
+  const forced = await writeInitConfig(path, '{ "roles": { "x": {} } }\n', { force: true })
+  assert.equal(forced.written, true)
+  assert.ok(readFileSync(path, 'utf8').includes('"x"'))
+})
+
+await okAsync('init: 命令端到端 —— 打印不落盘 / --write 落盘 / 已存在拒绝 / --force 覆盖', async () => {
+  const tmp = await mkdtemp(join(tmpdir(), 'dsh-rg-init-cmd-'))
+  const prevHome = process.env.DSH_HOME
+  process.env.DSH_HOME = tmp
+  try {
+    let captured
+    const fakeCommands = { list: () => [], register: (def) => { captured = def; return () => {} } }
+    const llm = {
+      listProviders: () => [{ id: 'deepseek-official' }],
+      listModels: async () => [{ id: 'deepseek-flash' }, { id: 'deepseek-v4-pro' }],
+    }
+    const fakeCtx = { get: (n) => (n === 'commands' ? fakeCommands : n === 'llm' ? llm : undefined), effect: (fn) => fn(), logger: { warn: () => {} } }
+    installRolegroupCommands(fakeCtx)
+    const path = join(tmp, 'rolegroup.jsonc')
+
+    const printed = await captured.handler({ rawInput: 'init' })
+    assert.equal(printed.kind, 'success', printed.text)
+    assert.ok(printed.text.includes('deepseek-official/deepseek-v4-pro'), printed.text)
+    assert.ok(!existsSync(path), '不带 --write 不得落盘')
+
+    const written = await captured.handler({ rawInput: 'init --write' })
+    assert.equal(written.kind, 'success', written.text)
+    assert.ok(existsSync(path), '--write 必须落盘')
+    assert.ok(readFileSync(path, 'utf8').includes('"analyst"'))
+
+    const again = await captured.handler({ rawInput: 'init --write' })
+    assert.equal(again.kind, 'error')
+    assert.ok(again.text.includes('已存在'), again.text)
+
+    const forced = await captured.handler({ rawInput: 'init --write --force' })
+    assert.equal(forced.kind, 'success', forced.text)
+
+    const unknown = await captured.handler({ rawInput: 'init --bogus' })
+    assert.equal(unknown.kind, 'error')
+    assert.ok(unknown.text.includes('未知子命令'), unknown.text)
+  } finally {
+    if (prevHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = prevHome
+  }
 })
 
 ok('command: installRolegroupCommands 无 commands 服务时不抛、只 warn（AC-17）', () => {
@@ -591,7 +720,7 @@ ok('command: 注册元数据 name/description/input.hint，无 attachments，注
   assert.ok(effectUsed, '注册必须包在 ctx.effect 里（H12 生命周期回收）')
   assert.equal(captured.name, 'rolegroup')
   assert.ok(typeof captured.description === 'string' && captured.description.length > 0 && captured.description.length <= 80, captured.description)
-  assert.equal(captured.input?.hint, '[doctor]')
+  assert.equal(captured.input?.hint, '[doctor|init]')
   assert.equal(captured.input?.attachments, undefined)
   assert.equal(typeof captured.handler, 'function')
 })
@@ -2374,7 +2503,151 @@ await okAsync('v0.6 审计一致性：preset broken → 移出 registered/公告
   }
 })
 
-await okAsync('v0.6 剪枝路径：provider 未注册被剪枝时，对应 preset 同步回收（v0.6/A9）', async () => {
+await okAsync('init: 层感知 —— 面板接管/项目文件存在时拒绝 --write；--project 写项目级并警告遮蔽（v0.6.3）', async () => {
+  const tmp = await mkdtemp(join(tmpdir(), 'dsh-rg-init-layer-'))
+  const prevHome = process.env.DSH_HOME
+  process.env.DSH_HOME = tmp
+  try {
+    const llm = {
+      listProviders: () => [{ id: 'deepseek-official' }],
+      listModels: async () => [{ id: 'deepseek-flash' }, { id: 'deepseek-v4-pro' }],
+    }
+    const makeHandler = (describeLayer) => {
+      let captured
+      const fakeCommands = { list: () => [], register: (def) => { captured = def; return () => {} } }
+      const fakeCtx = { get: (n) => (n === 'commands' ? fakeCommands : n === 'llm' ? llm : undefined), effect: (fn) => fn(), logger: { warn: () => {} } }
+      installRolegroupCommands(fakeCtx, { describeLayer })
+      return captured.handler
+    }
+    const userPath = join(tmp, 'rolegroup.jsonc')
+    const projectPath = join(tmp, 'proj', '.dsh', 'rolegroup.jsonc')
+
+    // ① 面板接管 → 拒绝，且不落盘
+    let handler = makeHandler(() => ({ panelEnabled: true, active: 'panel', userPath, projectPath }))
+    let res = await handler({ rawInput: 'init --write' })
+    assert.equal(res.kind, 'error', res.text)
+    assert.ok(res.text.includes('面板已接管'), res.text)
+    assert.ok(res.text.includes('重置为文件配置'), '必须给出退出接管的可执行路径')
+    assert.ok(!existsSync(userPath), '被拒绝时不得写文件')
+
+    // ② 项目级配置生效 → 用户级写入拒绝
+    handler = makeHandler(() => ({ panelEnabled: false, active: 'project', path: projectPath, userPath, projectPath }))
+    res = await handler({ rawInput: 'init --write' })
+    assert.equal(res.kind, 'error')
+    assert.ok(res.text.includes('项目级配置存在'), res.text)
+    assert.ok(res.text.includes('--project'), '必须提示改用 --project')
+
+    // ③ --project 可以写；若当前生效是用户级，要警告遮蔽
+    res = await handler({ rawInput: 'init --write --project' })
+    assert.equal(res.kind, 'success', res.text)
+    assert.ok(existsSync(projectPath), '项目级文件必须落在 .dsh/rolegroup.jsonc')
+    assert.equal(res.text.includes('遮蔽'), false, '当前生效层是项目级时不该提示遮蔽')
+    handler = makeHandler(() => ({ panelEnabled: false, active: 'user', path: userPath, userPath, projectPath }))
+    res = await handler({ rawInput: 'init --write --project --force' })
+    assert.ok(res.text.includes('遮蔽'), '写项目级遮蔽用户级时必须警告')
+
+    // ④ 打印模式永远显示当前生效层
+    handler = makeHandler(() => ({ panelEnabled: false, active: 'builtin', userPath, projectPath }))
+    res = await handler({ rawInput: 'init' })
+    assert.equal(res.kind, 'success')
+    assert.ok(res.text.includes('当前生效层：内置默认表'), res.text)
+  } finally {
+    if (prevHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = prevHome
+  }
+})
+
+await okAsync('init: --force 覆盖前备份；--diff 报出会被覆盖/丢弃的角色（v0.6.3）', async () => {
+  const tmp = await mkdtemp(join(tmpdir(), 'dsh-rg-init-bak-'))
+  const prevHome = process.env.DSH_HOME
+  process.env.DSH_HOME = tmp
+  try {
+    const llm = {
+      listProviders: () => [{ id: 'deepseek-official' }],
+      listModels: async () => [{ id: 'deepseek-flash' }, { id: 'deepseek-v4-pro' }],
+    }
+    let captured
+    const fakeCommands = { list: () => [], register: (def) => { captured = def; return () => {} } }
+    const fakeCtx = { get: (n) => (n === 'commands' ? fakeCommands : n === 'llm' ? llm : undefined), effect: (fn) => fn(), logger: { warn: () => {} } }
+    const userPath = join(tmp, 'rolegroup.jsonc')
+    installRolegroupCommands(fakeCtx, { describeLayer: () => ({ panelEnabled: false, active: 'user', path: userPath, userPath }) })
+
+    // 预置一份用户配置：analyst 会被覆盖，my_role 会被丢弃
+    await writeFile(userPath, '{ "roles": { "analyst": { "model": "old" }, "my_role": { "model": "keep" } } }\n', 'utf8')
+
+    const diffed = await captured.handler({ rawInput: 'init --diff' })
+    assert.equal(diffed.kind, 'success', diffed.text)
+    assert.ok(diffed.text.includes('会被覆盖：analyst'), diffed.text)
+    assert.ok(diffed.text.includes('会被丢弃'), diffed.text)
+    assert.ok(diffed.text.includes('my_role'), diffed.text)
+
+    const overwritten = await captured.handler({ rawInput: 'init --write --force' })
+    assert.equal(overwritten.kind, 'success', overwritten.text)
+    assert.ok(overwritten.text.includes('已备份原文件'), overwritten.text)
+    const backups = readdirSync(tmp).filter((name) => name.startsWith('rolegroup.jsonc.bak-'))
+    assert.equal(backups.length, 1, `必须留下恰好一份备份：${backups}`)
+    const backupText = readFileSync(join(tmp, backups[0]), 'utf8')
+    assert.ok(backupText.includes('my_role'), '备份必须是覆盖前的原文')
+  } finally {
+    if (prevHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = prevHome
+  }
+})
+
+// --- 模型链：内置备用档 + 启动期解析（决策 1：显式配置不自动降级）---
+ok('roles: parseRouteRef 只认 "provider/model"，首个斜杠切分', () => {
+  assert.deepEqual(parseRouteRef('deepseek-official/deepseek-flash'), { provider: 'deepseek-official', model: 'deepseek-flash' })
+  assert.deepEqual(parseRouteRef(' a / b '), { provider: 'a', model: 'b' })
+  assert.equal(parseRouteRef(''), undefined)
+  assert.equal(parseRouteRef('a'), undefined)
+  assert.equal(parseRouteRef('/b'), undefined)
+  assert.equal(parseRouteRef('a/'), undefined)
+  assert.equal(parseRouteRef(42), undefined)
+})
+
+ok('roles: resolveRoleRoute —— 主路由可用不降级 / provider 缺失沿链降级 / 全不可用给 tried / 模型未广告仍用主路由', () => {
+  const role = { toolName: 'analyst', provider: 'qwen-token-plan-cn', model: 'qwen3.8-max', fallbackModels: ['deepseek-official/deepseek-v4-pro', 'deepseek-official/deepseek-flash'] }
+  let out = resolveRoleRoute(role, { providers: ['qwen-token-plan-cn'], modelsOf: () => ['qwen3.8-max'] })
+  assert.equal(out.ok, true)
+  assert.equal(out.degraded, false)
+  assert.deepEqual([out.role.provider, out.role.model], ['qwen-token-plan-cn', 'qwen3.8-max'])
+  out = resolveRoleRoute(role, { providers: ['deepseek-official'], modelsOf: () => ['deepseek-flash'] })
+  assert.equal(out.ok, true)
+  assert.equal(out.degraded, true)
+  assert.equal(out.primary, 'qwen-token-plan-cn/qwen3.8-max', '必须保留原路由供报告标注')
+  assert.deepEqual([out.role.provider, out.role.model], ['deepseek-official', 'deepseek-flash'])
+  assert.equal(out.tried.length, 2, '第一个备用档模型未广告 → 进 tried，继续试下一个')
+  out = resolveRoleRoute(role, { providers: ['deepseek-official'], modelsOf: () => [] })
+  assert.equal(out.ok, false)
+  assert.deepEqual(out.tried.map((t) => t.reason), ['provider', 'model', 'model'])
+  out = resolveRoleRoute({ toolName: 'x', provider: 'p', model: 'm' }, { providers: ['p'], modelsOf: () => ['other'] })
+  assert.equal(out.ok, true)
+  assert.equal(out.warning, 'model-unadvertised')
+  assert.equal(out.degraded, false)
+  out = resolveRoleRoute(role, { providers: ['qwen-token-plan-cn'], modelsOf: () => undefined })
+  assert.equal(out.ok, true)
+  assert.equal(out.degraded, false)
+})
+
+ok('roles: 内置表提供跨 provider 备用链；用户覆盖但未写链则不继承（决策 1）', () => {
+  const { roles } = mergeRoles(undefined)
+  for (const role of roles) {
+    if (role.provider === 'deepseek-official') continue
+    assert.ok(Array.isArray(role.fallbackModels) && role.fallbackModels.length > 0, `${role.toolName} 必须带备用链`)
+    assert.ok(role.fallbackModels.every((ref) => parseRouteRef(ref)?.provider === 'deepseek-official'),
+      `${role.toolName} 的备用链必须兜到 dsh 保证注册的 deepseek-official：${role.fallbackModels}`)
+  }
+  const overridden = mergeRoles({ roles: { analyst: { persona: '自定义' } } }).roles.find((r) => r.toolName === 'analyst')
+  assert.equal(overridden.strict, true)
+  assert.equal(overridden.fallbackModels, undefined, '显式配置的角色不得自动继承内置备用链')
+  const explicit = mergeRoles({ roles: { analyst: { fallbackModels: ['x/y'] } } }).roles.find((r) => r.toolName === 'analyst')
+  assert.deepEqual(explicit.fallbackModels, ['x/y'])
+  const bad = mergeRoles({ roles: { analyst: { fallbackModels: ['no-slash'] } } })
+  assert.equal(bad.roles.some((r) => r.toolName === 'analyst'), false)
+  assert.ok(bad.problems.some((p) => p.includes('fallbackModels')), JSON.stringify(bad.problems))
+})
+
+await okAsync('v0.6 剪枝路径：只有 deepseek-official 时 5 个角色按内置链降级而非剪枝（chains/A9）', async () => {
   const tmp = await mkdtemp(join(tmpdir(), 'dsh-rg-v6-prune-'))
   const prevHome = process.env.DSH_HOME
   process.env.DSH_HOME = tmp
@@ -2388,13 +2661,18 @@ await okAsync('v0.6 剪枝路径：provider 未注册被剪枝时，对应 prese
     const fake = makeComposeCtx({ llm, agentPresets: presets.service, loader: makeContractLoader() })
     await apply(fake.ctx, { debounceMs: 1, maxWaitMs: 5 })
     const report = await waitForReport(reportPathOf(tmp), 8000)
-    assert.deepEqual(
-      report.invalid.map((i) => i.toolName),
-      ['analyst', 'planner', 'coder', 'reviewer', 'scribe'],
-      '只注册了 deepseek-official 的 provider：其余 5 个角色应被剪枝',
-    )
-    assert.deepEqual([...presets.definitions.keys()].sort(), ['rolegroup-fallback', 'rolegroup-scout'])
-    assert.deepEqual(fake.calls.disposes.map((c) => c.toolName).sort(), ['analyst', 'coder', 'planner', 'reviewer', 'scribe'])
+    assert.deepEqual(report.invalid, [], '内置链应消化 provider 缺失，不剪枝')
+    assert.equal(report.registered.length, 7, '7 个角色都应注册（5 个走备用档）')
+    for (const name of ['analyst', 'planner', 'coder', 'reviewer', 'scribe']) {
+      const row = report.registered.find((r) => r.toolName === name)
+      assert.equal(row.degraded, true, `${name} 必须标记为降级`)
+      assert.equal(row.provider, 'deepseek-official', `${name} 必须落到 deepseek-official`)
+      assert.ok(typeof row.primary === 'string' && row.primary.includes('/'), `${name} 必须记录原路由`)
+    }
+    assert.equal(report.registered.find((r) => r.toolName === 'scout').degraded, undefined, '主路由可用的角色不得标降级')
+    assert.equal(presets.definitions.size, 7, 'preset 全部保留（模型不属于 preset）')
+    assert.deepEqual(fake.calls.disposes.map((c) => c.toolName).sort(), ['analyst', 'coder', 'planner', 'reviewer', 'scribe'],
+      '降级角色重挂 fiber：旧 fiber 必须 dispose')
   } finally {
     __setTestOverrides(undefined)
     if (prevHome === undefined) delete process.env.DSH_HOME
@@ -3205,6 +3483,54 @@ await okAsync('controller: 推理档位按模型目录校验——非法值标�
   unsubscribe()
 })
 
+await okAsync('controller: provider 未注册 → routeGaps 提示 + 一键补齐到默认/首个可用模型（fill/AC-1）', async () => {
+  const effective = [
+    { toolName: 'analyst', provider: 'qwen-token-plan-cn', model: 'qwen3.8-max', reasoningEffort: 'high', persona: '分析', summary: '需求澄清' },
+    { toolName: 'scout', provider: 'deepseek-official', model: 'deepseek-flash', persona: '探索', summary: '定位' },
+  ]
+  const mkCatalog = (withDefault) => ({
+    groups: [{ id: 'deepseek-official', name: 'DeepSeek', models: [{ id: 'deepseek-flash', name: 'deepseek-flash' }, { id: 'deepseek-v4-pro', name: 'deepseek-v4-pro' }] }],
+    failures: [],
+    ...(withDefault ? { default: { provider: 'deepseek-official', model: 'deepseek-v4-pro' } } : {}),
+  })
+  const makeController = (catalog) => {
+    const scope = makeFakeScope({ value: { roles: [] }, base: SECTION7(), user: undefined })
+    const controller = new RolegroupCardController(scope, makeFakeClientCtx({ ok: true, value: catalog }), {
+      fetch: async () => ({ ok: true, json: async () => ({ ok: true, effective: { roles: effective } }) }),
+    })
+    return controller
+  }
+
+  // ① 有部署默认路由 → 补到默认
+  let controller = makeController(mkCatalog(true))
+  let face = controller.inject()
+  let unsubscribe = face.hooks.rolegroupCard.subscribe(() => {})
+  await flushMicrotasks()
+  let proj = face.hooks.rolegroupCard.getSnapshot()
+  assert.deepEqual(proj.routeGaps, [{ toolName: 'analyst', provider: 'qwen-token-plan-cn' }], '只标 provider 未注册的行')
+  face.fillUnavailableRoutes()
+  proj = face.hooks.rolegroupCard.getSnapshot()
+  let row = proj.rows.find((r) => r.toolName === 'analyst')
+  assert.equal(row.provider, 'deepseek-official')
+  assert.equal(row.model, 'deepseek-v4-pro', '必须优先用部署默认路由')
+  assert.equal(row.reasoningEffort, '', '换模型后清掉旧推理档位')
+  assert.equal(proj.dirty, true, '补齐只改草稿，不自动保存')
+  assert.deepEqual(proj.routeGaps, [], '补齐后不再有缺口')
+  assert.equal(proj.rows.find((r) => r.toolName === 'scout').provider, 'deepseek-official', '可用行不得被改动')
+  unsubscribe()
+
+  // ② 没有默认路由 → 取第一个可用 provider 的第一个模型
+  controller = makeController(mkCatalog(false))
+  face = controller.inject()
+  unsubscribe = face.hooks.rolegroupCard.subscribe(() => {})
+  await flushMicrotasks()
+  face.fillUnavailableRoutes()
+  proj = face.hooks.rolegroupCard.getSnapshot()
+  row = proj.rows.find((r) => r.toolName === 'analyst')
+  assert.deepEqual([row.provider, row.model], ['deepseek-official', 'deepseek-flash'])
+  unsubscribe()
+})
+
 ok('settings-nav-icon: 按 label 标记带 svg 的导航按钮；CSS 走 mask；无 document 安全 no-op', () => {
   const svg = { tagName: 'svg' }
   const target = { textContent: '角色配置', dataset: {}, firstElementChild: svg }
@@ -3636,7 +3962,7 @@ await okAsync('client-bundle: 真实产物的头部渲染出「角色配置 v<�
   const baseProjection = {
     available: true, writable: true, takeover: false, dirty: true, saving: false,
     failed: false, conflicted: false, rows: [],
-    catalog: { status: 'idle', groups: [], partial: false }, basePresent: true,
+    catalog: { status: 'idle', groups: [], partial: false }, routeGaps: [], basePresent: true,
     effective: { required: true, status: 'ready', error: undefined, prefilled: true },
     config: { status: 'idle', error: undefined, notice: undefined },
   }
@@ -3730,6 +4056,21 @@ await okAsync('client-bundle: 真实产物的头部渲染出「角色配置 v<�
   assert.ok(effectiveErrorTexts.includes(zh.effectiveErrorHint), '预填失败必须给出保存警示')
   const retryButton = effectiveErrorNodes.find((node) => node.type === 'button' && textsOfNodes([node]).includes(zh.retryEffective))
   assert.ok(retryButton, '预填失败必须提供重试按钮')
+
+  // —— provider 未注册提示：有缺口时渲染提示 + 补齐按钮，无缺口时不渲染 ——
+  const gapNodes = renderCard({
+    ...baseProjection,
+    rows: [{ toolName: 'analyst', provider: 'qwen-token-plan-cn', model: 'qwen3.8-max', reasoningEffort: '', persona: '', summary: '', isCustom: false, invalidFields: [] }],
+    routeGaps: [{ toolName: 'analyst', provider: 'qwen-token-plan-cn' }],
+  })
+  const gapTexts = textsOfNodes(gapNodes)
+  assert.ok(gapTexts.includes('1'), '提示必须带上缺口数量')
+  assert.ok(gapTexts.includes(zh.routeGapNotice), '提示文案必须来自词典')
+  assert.ok(gapTexts.includes(zh.fillRoutes), '必须渲染补齐按钮')
+  const filler = gapNodes.find((node) => node.type === 'button' && textsOfNodes([node]).includes(zh.fillRoutes))
+  assert.ok(filler, '补齐按钮必须可点')
+  assert.ok(!textsOfNodes(baseProjection.routeGaps.length === 0 ? renderCard(baseProjection) : []).includes(zh.routeGapNotice),
+    '无缺口时不得出现提示')
 
   // —— 推理档位：目录声明 efforts 时渲染 select，默认项显示模型默认档位；不支持时禁用 ——
   const effortRow = {

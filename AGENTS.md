@@ -21,7 +21,8 @@ dsh 的**角色化委派插件**：角色 = 名字 + 绑定模型 + persona；�
 | `lib/settings-table.js` | section ↔ 文件配置的双向映射、跨字段校验 |
 | `lib/doctor.js` | 纯逻辑：快照读取/归一化、`auditRoles`、`renderDoctorText` |
 | `lib/config-info.js` | 「配置文件」查看器：当前配置快照纯函数 + 仅本机的只读 web 路由 |
-| `lib/command.js` | `/rolegroup` 命令面 |
+| `lib/command.js` | `/rolegroup` 命令面（doctor / init） |
+| `lib/init.js` | `/rolegroup init` 纯逻辑：按可用路由生成起始 jsonc、项目/用户路径、覆盖前备份与 `--diff` 摘要 |
 | `lib/startup-scheduler.js` | 剪枝防抖 + 最大等待上限 |
 | `lib/jsonc.js` | 带注释 JSON 解析 |
 | `src/client/` | 浏览器侧：`controller.js`（纯逻辑）、`card.jsx`（渲染）、`locales.js`（词典）、`meta.js`（版本/仓库元信息，版本由构建注入）、`config-file.js`（配置文件 → 右侧栏 Session 地址）、`settings-nav-icon.js`（设置页导航图标的 scoped CSS 装饰）、`index.js`（槽位注册） |
@@ -87,8 +88,31 @@ dsh 的**角色化委派插件**：角色 = 名字 + 绑定模型 + persona；�
 - **`engines.dsh` 的 semver 坑**：`>=0.2.1` **不包含** `0.2.1-rc.2`（prerelease 被排除）。插件市场/
   插件管理器按 `engines.dsh` 判兼容，写错会让插件卡片直接显示「异常」并跳过 meta（连图标都不读）。
   当前范围是 `>=0.2.1-rc.1`。
+- **内置链便宜档优先**：`deepseek-flash` → `deepseek-v4-pro`，v4-pro 只在 flash 不可用时兜底（额度价值判断：
+  v4-pro 在 coding 榜排名低于 flash，且无专属订阅，不作为默认第一兜底）。
+- **模型链是「启动期解析」不是运行期切换**：`dsh-tool-subagent` 的 `agentOptions` 在注册时固定，所以
+  备用档只能靠**重挂 fiber + 重注册 preset** 生效（`finalize` 里做，顺序：注销 fiber → 注销 preset →
+  注册 preset → 注册 fiber）。preset 的 name/description 带模型，故降级后必须重建 preset，否则子代理
+  header 会继续显示原主路由。
+- **显式配置不自动降级**（决策 1）：`mergeRoles` 给每个角色打 `strict`（出现于用户配置即 true）；
+  用户的角色若没写 `fallbackModels`，**不继承**内置链。内置链只服务「用户没写这个角色」的情形。
+- **面板层不携带模型链**（layer 1）：`rolesToSection` / `sectionToFileConfig` 白名单里没有
+  `fallbackModels`，面板保存会丢链；这是刻意的——面板=显式配置，链只在 jsonc 里声明。若将来给面板
+  加链编辑，必须同时改这三处映射并补 round-trip 断言。
+- **面板的「按可用模型补齐」只改草稿**（`fillUnavailableRoutes`）：缺口判定 = provider 不在
+  `modelCatalog.groups`（已注册 provider 清单）里；补齐目标 = `modelCatalog.default`，没有则第一个可用
+  provider 的第一个模型；换模型会清掉旧 `reasoningEffort`（新模型未必支持）。写入仍走用户点「保存」，
+  不要改成自动保存。
+- **`init` 必须先做层检查**（v0.6.3）：`installRolegroupCommands` 的 `describeLayer` 回调给出「现在生效的
+  是哪一层」。面板接管 → `--write` 拒绝（jsonc 整层让位）；项目级文件生效 → 用户级写入拒绝，提示改用
+  `--project`；`--force` 覆盖前会备份 `<path>.bak-<ts>`。别把这段检查删成"总是写"，否则会产出
+  「写成功但不生效」的文件。
+- **`init` 只覆盖「主路由不可用」的角色**：生成的 jsonc 是一份**显式**配置（写入的角色变 strict，
+  不再自动降级），所以每条都带上剩余备用链；完全没有可用路由的角色不写条目（空 provider 会让
+  `mergeRoles` 整条跳过），只留注释。落盘默认 `wx`（拒绝覆盖），`--force` 才 `w`。
 - **配置不热生效**：快照只在启动剪枝终验时写一次；改配置需重启 + 开新会话。
-- **provider 未注册的角色会被剪枝**（不注册、只记进 `invalid[]`）。兜底角色尤其要留意：
+- **provider 未注册的角色会被剪枝**（不注册、只记进 `invalid[]`）——但这条只对**显式配置**的角色成立：
+  内置角色带备用链，会先降级到 `deepseek-official` 再谈剪枝（见上两条）。兜底角色尤其要留意：
   一条被剪枝的兜底路由等于不存在。
 
 ## settings 模型（0.1.7+；本插件 v0.4 迁入）
