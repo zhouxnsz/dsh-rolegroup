@@ -203,6 +203,18 @@ ok('buildInstanceConfig: reasoningEffort 透传 + allowedAgentPresets 单元素�
   assert.deepEqual(config.allowedAgentPresets, ['rolegroup-coder'])
 })
 
+ok('roleAnnouncement: 有降级时追加「运行时降级」段；健康时完全不出现（v0.7/AC-12）', () => {
+  const roles = [{ toolName: 'scout', provider: 'deepseek-official', model: 'deepseek-flash', summary: '探索定位' }]
+  const healthy = roleAnnouncement(roles)
+  assert.equal(healthy.includes('运行时降级'), false, '健康时不得出现降级段（否则每次会话都在报错）')
+  const degraded = roleAnnouncement(roles, { degradations: ['已剪枝：coder', '注册失败：planner'] })
+  assert.ok(degraded.includes('运行时降级'), degraded)
+  assert.ok(degraded.includes('已剪枝：coder'), degraded)
+  assert.ok(degraded.includes('注册失败：planner'), degraded)
+  assert.ok(degraded.includes('/rolegroup doctor'), '降级提示必须指向 doctor（模型据此告知用户怎么修）')
+  assert.equal(degraded.includes('`coder`'), false, '降级段不得用反引号包角色名（既有断言靠它判断在册列表）')
+})
+
 ok('所有内置角色名都是合法工具名且唯一', () => {
   const names = Object.keys(DEFAULT_ROLES)
   assert.equal(new Set(names).size, names.length)
@@ -2794,6 +2806,28 @@ await okAsync('v0.6 契约缺席时重组装：failed[] 仍须全量（fail-loud
     const report = JSON.parse(readFileSync(reportPathOf(tmp), 'utf8'))
     assert.deepEqual(report.registered, [], '契约缺席时不得注册角色')
     assert.deepEqual(report.failed, Object.keys(DEFAULT_ROLES), '重组装后 failed[] 仍须全量（fail-loud 不被清空）')
+  } finally {
+    __setTestOverrides(undefined)
+    if (prevHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = prevHome
+  }
+})
+
+await okAsync('apply 降级可见性：preset broken → 系统提示公告含「运行时降级」与角色名（v0.7/AC-12 集成）', async () => {
+  const tmp = await mkdtemp(join(tmpdir(), 'dsh-rg-v7-degraded-'))
+  const prevHome = process.env.DSH_HOME
+  process.env.DSH_HOME = tmp
+  __setTestOverrides({ debounceMs: 1, maxWaitMs: 5 })
+  try {
+    const presets = makeFakeAgentPresets({ brokenIds: new Set(['rolegroup-analyst']) })
+    const fake = makeComposeCtx({ agentPresets: presets.service, loader: makeContractLoader() })
+    await apply(fake.ctx, { debounceMs: 1, maxWaitMs: 5 })
+    await readReportWhen(tmp, (r) => Array.isArray(r.invalid) && r.invalid.length > 0)
+    const announcement = fake.calls.announcements.at(-1) ?? ''
+    assert.ok(announcement.includes('运行时降级'), `公告必须让模型看见降级：${announcement.slice(0, 200)}`)
+    assert.ok(announcement.includes('analyst'), '降级段必须点名具体角色')
+    assert.ok(announcement.includes('/rolegroup doctor'), '必须给出排障入口')
+    assert.ok(!announcement.includes('`analyst`'), '被剔除的角色不得再出现在在册列表里')
   } finally {
     __setTestOverrides(undefined)
     if (prevHome === undefined) delete process.env.DSH_HOME
