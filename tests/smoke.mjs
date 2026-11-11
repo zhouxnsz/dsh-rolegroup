@@ -41,6 +41,9 @@ import { NAV_ICON_CSS, installSettingsNavIcon, markSettingsNavButton } from '../
 const realFetch = globalThis.fetch
 globalThis.fetch = async () => ({ ok: true, json: async () => ({ ok: true, effective: { roles: [] } }) })
 
+/** 内置角色数（派生自内置表：加角色不再需要改 20 处魔法数字）。 */
+const BUILTIN_COUNT = Object.keys(DEFAULT_ROLES).length
+
 let passed = 0
 function ok(label, fn) {
   fn()
@@ -64,10 +67,10 @@ ok('jsonc: 非法输入抛错', () => {
 })
 
 // --- mergeRoles ---
-ok('mergeRoles: 无配置 → 7 个内置角色', () => {
+ok('mergeRoles: 无配置 → 内置角色表（数量派生自 DEFAULT_ROLES）', () => {
   const { roles, problems } = mergeRoles(undefined)
   assert.equal(problems.length, 0)
-  assert.equal(roles.length, 7)
+  assert.equal(roles.length, BUILTIN_COUNT)
   assert.deepEqual(roles.map((r) => r.toolName), Object.keys(DEFAULT_ROLES))
 })
 
@@ -215,6 +218,29 @@ ok('roleAnnouncement: 有降级时追加「运行时降级」段；健康时完�
   assert.equal(degraded.includes('`coder`'), false, '降级段不得用反引号包角色名（既有断言靠它判断在册列表）')
 })
 
+// --- v0.8/AC-13：多模态角色 vision 的绑定与安全约束 ---
+// 选型依据（两条独立证据，写进断言防止随手改坏）：
+//   ① 用户长期实践：omo `multimodal-looker` 长期跑 qwen3.8-flash；
+//   ② 本项目委托链路探针 scout-02（子会话 OCR）：qwen3.8-flash 10/10；
+//      同批 MiniMax-M3 仅 4/10 且**编造**候选字符串 → 必须排除。
+ok('roles: vision 角色 —— 绑定 qwen3.8-flash、备用链只含视觉已验证且保证注册的档位（v0.8/AC-13）', () => {
+  const { roles } = mergeRoles(undefined)
+  const vision = roles.find((r) => r.toolName === 'vision')
+  assert.ok(vision, '内置表必须含 vision 角色')
+  assert.equal(vision.provider, 'qwen-token-plan-cn')
+  assert.equal(vision.model, 'qwen3.8-flash', '选型依据：omo 长期实践 + scout-02 10/10')
+  assert.deepEqual(vision.fallbackModels, ['deepseek-official/deepseek-flash'],
+    '备用链只放 deepseek-official（唯一保证注册）且视觉已验证的 flash')
+  assert.ok(!JSON.stringify(vision).toLowerCase().includes('minimax'),
+    'MiniMax-M3 在 OCR 探针 4/10 且编造内容，绝不可进 vision 的链')
+  assert.ok(!JSON.stringify(vision.fallbackModels).includes('v4-pro'),
+    'deepseek-v4-pro 的视觉能力未测，不放进视觉角色的链')
+  assert.ok(vision.summary.includes('图'), 'summary 必须说清这是看图角色')
+  assert.ok(vision.persona.includes('看不清'), `persona 必须含"看不清就说不清"的铁律：${vision.persona}`)
+  assert.ok(/绝不猜测|不编造/.test(vision.persona), 'persona 必须禁止猜测/编造')
+  assert.ok(vision.persona.includes('read_image'), 'persona 必须点名 read_image 工具（委派只能传文字路径）')
+})
+
 ok('所有内置角色名都是合法工具名且唯一', () => {
   const names = Object.keys(DEFAULT_ROLES)
   assert.equal(new Set(names).size, names.length)
@@ -285,6 +311,7 @@ await okAsync('doctor: readStartupReport 读真实快照副本 → ok + 7 角色
   // 注入 now（快照时间 2026-09-22T12:09:27.382Z 之后数小时），避免用例随真实日期漂移
   const state = await readStartupReport({ env: { DSH_HOME: fixtureHome }, now: new Date('2026-09-22T20:00:00Z') })
   assert.equal(state.kind, 'ok')
+  // 这是**静态夹具**（2026-09-22 的旧快照只有 7 条），与当前内置角色数无关 → 保持字面量
   assert.equal(state.report.registered.length, 7)
   const first = state.report.registered[0]
   assert.equal(first.toolName, 'analyst')
@@ -622,7 +649,7 @@ ok('init: buildInitPlan —— 主路由全可用时不需要文件；不可用�
   // ② 只有 deepseek → 5 条覆盖，且写的是解析后的路由 + 剩余链
   plan = buildInitPlanFromBuiltins({ providers: ['deepseek-official'], modelsOf: () => ['deepseek-flash', 'deepseek-v4-pro'] })
   assert.equal(plan.needsFile, true)
-  assert.deepEqual(plan.entries.map((e) => e.toolName), ['analyst', 'planner', 'coder', 'reviewer', 'scribe'])
+  assert.deepEqual(plan.entries.map((e) => e.toolName), ['analyst', 'planner', 'coder', 'reviewer', 'scribe', 'vision'])
   const analyst = plan.entries[0]
   assert.equal(analyst.provider, 'deepseek-official')
   assert.equal(analyst.model, 'deepseek-flash', '内置链便宜档优先：缺 qwen 时先降级到 flash')
@@ -634,7 +661,7 @@ ok('init: buildInitPlan —— 主路由全可用时不需要文件；不可用�
   const merged = mergeRoles(parseJsonc(plan.text))
   assert.deepEqual(merged.problems, [])
   const strictNames = merged.roles.filter((r) => r.strict).map((r) => r.toolName)
-  assert.deepEqual(strictNames, ['analyst', 'planner', 'coder', 'reviewer', 'scribe'])
+  assert.deepEqual(strictNames, ['analyst', 'planner', 'coder', 'reviewer', 'scribe', 'vision'])
   assert.equal(merged.roles.find((r) => r.toolName === 'analyst').provider, 'deepseek-official')
 
   // ④ 完全没有可用路由 → 不写条目，只留注释（写空 provider 会让 mergeRoles 跳过整条）
@@ -1040,14 +1067,14 @@ await okAsync('command: runDoctor 接 listConfigurableProviders；API 缺失/抛
 })
 
 ok('doctor: auditRoles 内置角色缺席快照 → missingDefaults 提示级 ⚠️ 不计入 unhealthy，渲染显式缺席（AC-24 负向：删 scout）', () => {
-  const { roles } = mergeRoles(undefined) // 7 个内置角色
+  const { roles } = mergeRoles(undefined) // 内置角色
   // 负向构造：删掉 scout 的快照
   const withoutScout = normalizeReport({
     registered: roles.filter((r) => r.toolName !== 'scout').map((r) => ({
       toolName: r.toolName, provider: r.provider, model: r.model, readonly: r.readonly,
     })),
   })
-  assert.equal(withoutScout.registered.length, 6)
+  assert.equal(withoutScout.registered.length, BUILTIN_COUNT - 1, '删掉 scout 后剩内置角色数 - 1')
   const providers = ['qwen-token-plan-cn', 'kimi-coding', 'deepseek-official', 'example-provider']
   const modelsByProvider = {
     'qwen-token-plan-cn': ['qwen3.8-max', 'qwen3.8-flash'],
@@ -1058,7 +1085,7 @@ ok('doctor: auditRoles 内置角色缺席快照 → missingDefaults 提示级 �
   const modelsOf = (p) => modelsByProvider[p] ?? null
   const audit = auditRoles(withoutScout, { providers, modelsOf })
   // 在册 6 角色全绿，缺席提示不影响计数（提示级，同 T4 anomalies 口径）
-  assert.equal(audit.healthy, 6)
+  assert.equal(audit.healthy, BUILTIN_COUNT - 1, '在册角色全绿，缺席提示不影响计数')
   assert.equal(audit.unhealthy, 0)
   assert.equal(audit.missingDefaults.length, 1)
   assert.equal(audit.missingDefaults[0].toolName, 'scout')
@@ -1069,13 +1096,13 @@ ok('doctor: auditRoles 内置角色缺席快照 → missingDefaults 提示级 �
   assert.ok(text.includes('角色 scout 未在册（可能被剪枝或配置删除）'), text)
   assert.ok(text.includes('无异常'), text)
   assert.equal(text.split('\n').filter((l) => l.startsWith('❌ ')).length, 0)
-  // 完整 7 角色快照 → 无缺席提示
+  // 完整内置角色快照 → 无缺席提示
   const full = normalizeReport({
     registered: roles.map((r) => ({ toolName: r.toolName, provider: r.provider, model: r.model, readonly: r.readonly })),
   })
   const fullAudit = auditRoles(full, { providers, modelsOf })
   assert.deepEqual(fullAudit.missingDefaults, [])
-  assert.equal(fullAudit.healthy, 7)
+  assert.equal(fullAudit.healthy, BUILTIN_COUNT)
 })
 
 ok('doctor: auditRoles 模型名近似建议：edit-distance ≤2 或互为前缀 → hint 追加「是否想用」（AC-25）', () => {
@@ -1307,7 +1334,7 @@ await okAsync('apply W3：终验路由校验抛错仍写报告（registered 全�
         llm: { listProviders() { throw new Error('llm 已卸载') } },
         // 桩 loader（评审弱点修复）：此前 fake ctx 不提供 loader，resolveToolSubagent 走
         // 「解析失败 → warn + 跳过注册」分支，ctx.plugin 从未被调用、registered 恒为空，
-        // 「全量在册」断言被空集平凡满足。现提供桩 loader 让 7 个角色真实走完注册
+        // 「全量在册」断言被空集平凡满足。现提供桩 loader 让全部角色真实走完注册
         // （bare import 在本仓库必 ERR_MODULE_NOT_FOUND，已实证，故桩 loader 必定被走到）。
         // 缓存串扰说明：resolveToolSubagent 的 toolSubagent 是模块级变量，本用例成功后
         // 桩模块会被缓存并泄漏给后续用例（AC-31）——AC-31 自带同款桩 loader 且只断言
@@ -1317,9 +1344,9 @@ await okAsync('apply W3：终验路由校验抛错仍写报告（registered 全�
     })
     await apply(fake.ctx, { debounceMs: 1, maxWaitMs: 5 })
     const report = await waitForReport(join(tmp, 'plugins', 'dsh-rolegroup', 'last-startup.json'))
-    assert.equal(fake.calls.plugin.length, 7, '桩 loader 下 7 个角色必须真实走完 ctx.plugin 注册（杜绝空集平凡满足）')
-    assert.equal(report.registered.length, 7, '无论校验成败，registered 必须全量在册（未被剪枝/吞没）')
-    assert.deepEqual(report.registered.map((r) => r.toolName), Object.keys(DEFAULT_ROLES), 'registered 的 toolName 集合必须 == 7 个内置角色名')
+    assert.equal(fake.calls.plugin.length, BUILTIN_COUNT, '桩 loader 下所有内置角色必须真实走完 ctx.plugin 注册（杜绝空集平凡满足）')
+    assert.equal(report.registered.length, BUILTIN_COUNT, '无论校验成败，registered 必须全量在册（未被剪枝/吞没）')
+    assert.deepEqual(report.registered.map((r) => r.toolName), Object.keys(DEFAULT_ROLES), 'registered 的 toolName 集合必须 == 内置角色名')
     assert.deepEqual(report.invalid, [], '校验失败时 invalid 必须为空数组')
     assert.deepEqual(report.failed, [], '桩 loader 下不得有注册失败')
     assert.ok(
@@ -1572,7 +1599,7 @@ import { CONFIG_UNAVAILABLE_REASON, Config, ROLEGROUP_CONFIG_FIELDS, ROLEGROUP_C
 ok('settings-table: rolesToSection 内置表 → 7 项、首项 analyst 四字段 + persona/summary（v0.3/AC-5）', () => {
   const { roles } = mergeRoles(undefined)
   const section = rolesToSection(roles)
-  assert.equal(section.roles.length, 7)
+  assert.equal(section.roles.length, BUILTIN_COUNT)
   const first = section.roles[0]
   assert.equal(first.toolName, 'analyst')
   assert.equal(first.provider, 'qwen-token-plan-cn')
@@ -1898,7 +1925,7 @@ await okAsync('compose 重构等价性：启动快照字段形状与 registered 
     const fake = makeComposeCtx() // 不传条目 Config → settings 未接管形态，行为须与 v0.1 逐字一致
     await apply(fake.ctx, { debounceMs: 1, maxWaitMs: 5 })
     const report = await waitForReport(reportPathOf(tmp))
-    assert.equal(fake.calls.plugin.length, 7, '启动路径必须立即注册 7 角色（不等 settings/prune）')
+    assert.equal(fake.calls.plugin.length, BUILTIN_COUNT, '启动路径必须立即注册全部内置角色（不等 settings/prune）')
     assert.deepEqual(Object.keys(report).sort(),
       ['configError', 'configMtimeMs', 'configSource', 'failed', 'invalid', 'problems', 'registered', 'time'],
       '快照字段集合必须与重构前逐字一致（锁死重构未改变产物）')
@@ -1906,7 +1933,7 @@ await okAsync('compose 重构等价性：启动快照字段形状与 registered 
     assert.equal(report.configError, null)
     assert.equal(report.configMtimeMs, null)
     assert.ok(typeof report.time === 'string')
-    assert.equal(report.registered.length, 7)
+    assert.equal(report.registered.length, BUILTIN_COUNT)
     assert.deepEqual(report.registered.map((r) => r.toolName), Object.keys(DEFAULT_ROLES))
     // v0.5：registered[] 不再带 readonly（红线 3 的显式例外，见 lib/index.js writeReport）
     assert.deepEqual(report.registered[0], { toolName: 'analyst', provider: 'qwen-token-plan-cn', model: 'qwen3.8-max' })
@@ -2035,20 +2062,20 @@ await okAsync('compose volatile 触发重组装：旧 fiber 全 dispose、按新
     const fake = makeComposeCtx()
     await apply(fake.ctx, entry.config)
     assert.ok(fake.hasVolatileListener(), 'v0.4 必须订阅 loader/volatile-update（取代已移除的 SettingsScope.watch）')
-    assert.equal(fake.calls.plugin.length, 7, '启动路径立即注册 7 角色（文件表）')
+    assert.equal(fake.calls.plugin.length, BUILTIN_COUNT, '启动路径立即注册全部内置角色（文件表）')
     f.advance(3000) // 终验跑完（首次校验）
     await waitForReport(reportPathOf(tmp))
-    assert.equal(fake.calls.plugin.length, 7, '终验不得重复注册')
+    assert.equal(fake.calls.plugin.length, BUILTIN_COUNT, '终验不得重复注册')
     assert.ok(!JSON.parse(readFileSync(reportPathOf(tmp), 'utf8')).configSource?.includes?.('settings'), '未接管时 configSource 不得标 settings')
     // 面板保存一张把 coder.model 改掉的表 → cordis 提交 volatile
     const base = rolesToSection(mergeRoles(undefined).roles)
     const changed = { roles: base.roles.map((r) => (r.toolName === 'coder' ? { ...r, model: 'k3-recomposed' } : r)) }
     entry.setEnabled(true); entry.setRoles(changed.roles) // 面板保存 = enabled + roles 一起写
     fake.fireVolatile()
-    assert.equal(fake.calls.plugin.length, 7, 'volatile 防抖窗（300ms）内不得立即重组装')
+    assert.equal(fake.calls.plugin.length, BUILTIN_COUNT, 'volatile 防抖窗（300ms）内不得立即重组装')
     f.advance(300) // 满防抖 → onTable → recompose
-    await waitForCond(() => fake.calls.plugin.length === 14, '重组装后第二轮 7 角色注册（7+7）')
-    assert.equal(fake.calls.disposes.length, 7, '旧 7 条 fiber 必须全部 dispose')
+    await waitForCond(() => fake.calls.plugin.length === BUILTIN_COUNT * 2, '重组装后第二轮全量注册（N+N）')
+    assert.equal(fake.calls.disposes.length, BUILTIN_COUNT, '旧 fiber 必须全部 dispose')
     const coderCfg = fake.calls.plugin.filter((c) => c.toolName === 'coder').at(-1)
     assert.equal(coderCfg.agentOptions.model, 'k3-recomposed', '第二轮 coder 必须按新表注册')
     const lastAnnouncement = fake.calls.announcements.at(-1)
@@ -2084,11 +2111,11 @@ await okAsync('compose pruned 闸门：终验前表变更只置 pending 不重�
     // 全部定时器在假时钟上；若闸门失效（pruned===false 也重组装），其微任务链在
     // setImmediate 排空后必然已推进到 ctx.plugin——这是确定性检测，不是真实等待
     await new Promise((r) => setImmediate(r))
-    assert.equal(fake.calls.plugin.length, 7, 'pruned===false 期间表变更只许置 pendingTable，不得重组装')
+    assert.equal(fake.calls.plugin.length, BUILTIN_COUNT, 'pruned===false 期间表变更只许置 pendingTable，不得重组装')
     assert.equal(fake.calls.disposes.length, 0, 'pruned===false 期间不得 dispose 任何 fiber')
     f.advance(3000) // 终验跑完 → 须补做一次 recompose
-    await waitForCond(() => fake.calls.plugin.length === 14, 'prune 完成后补做的 recompose（7+7）')
-    assert.equal(fake.calls.disposes.length, 7)
+    await waitForCond(() => fake.calls.plugin.length === BUILTIN_COUNT * 2, 'prune 完成后补做的 recompose（N+N）')
+    assert.equal(fake.calls.disposes.length, BUILTIN_COUNT)
     await readReportWhen(tmp, (r) => typeof r.configSource === 'string' && r.configSource.includes('settings'))
     const report = JSON.parse(readFileSync(reportPathOf(tmp), 'utf8'))
     assert.equal(report.registered.find((r) => r.toolName === 'coder').model, 'k3-pending', '补做的 recompose 必须按 pending 表注册')
@@ -2119,17 +2146,17 @@ await okAsync('volatile: 300ms 防抖 + sameSection 短路——同值连发 0 �
     entry.setEnabled(true); entry.setRoles(base.roles)
     fake.fireVolatile(); fake.fireVolatile(); fake.fireVolatile()
     f.advance(1000)
-    assert.equal(fake.calls.plugin.length, 7, '同值连发必须被 sameSection 短路（0 次重组装触发）')
+    assert.equal(fake.calls.plugin.length, BUILTIN_COUNT, '同值连发必须被 sameSection 短路（0 次重组装触发）')
     // ② 异值连发（v1 → v2 → v1）→ 防抖后恰好 1 次尾随执行，值为最后一发
     entry.setRoles(v1.roles); fake.fireVolatile(); f.advance(100)
     entry.setRoles(v2.roles); fake.fireVolatile(); f.advance(100)
     entry.setRoles(v1.roles); fake.fireVolatile()
     f.advance(299)
-    assert.equal(fake.calls.plugin.length, 7, '防抖窗未满（299ms）不得重组装')
+    assert.equal(fake.calls.plugin.length, BUILTIN_COUNT, '防抖窗未满（299ms）不得重组装')
     f.advance(1) // 满 300ms
-    await waitForCond(() => fake.calls.plugin.length === 14, '异值连发必须恰好 1 次尾随执行')
+    await waitForCond(() => fake.calls.plugin.length === BUILTIN_COUNT * 2, '异值连发必须恰好 1 次尾随执行')
     f.advance(1000)
-    assert.equal(fake.calls.plugin.length, 14, '尾随之后不得重复重组装')
+    assert.equal(fake.calls.plugin.length, BUILTIN_COUNT * 2, '尾随之后不得重复重组装')
     const coderCfg = fake.calls.plugin.filter((c) => c.toolName === 'coder').at(-1)
     assert.equal(coderCfg.agentOptions.model, 'k3-v1', '尾随执行的值必须是最后一发')
   } finally {
@@ -2162,16 +2189,16 @@ await okAsync('compose recompose 的角色校验：新表中未注册 provider �
     entry.setEnabled(true); entry.setRoles(ghost) // 面板保存一张把 scribe.provider 改成未注册值的表
     fake.fireVolatile()
     f.advance(300) // 防抖满 → recompose
-    await waitForCond(() => fake.calls.plugin.length === 14, '重组装第二轮注册')
+    await waitForCond(() => fake.calls.plugin.length === BUILTIN_COUNT * 2, '重组装第二轮注册')
     await readReportWhen(tmp, (r) => typeof r.configSource === 'string' && r.configSource.includes('settings'))
     const report = JSON.parse(readFileSync(reportPathOf(tmp), 'utf8'))
     assert.equal(report.invalid.length, 1, JSON.stringify(report.invalid))
     assert.equal(report.invalid[0].toolName, 'scribe')
     assert.ok(report.invalid[0].reason.includes('ghost-provider'), report.invalid[0].reason)
-    assert.equal(report.registered.length, 6, 'scribe 被剪枝后剩 6 角色在册')
+    assert.equal(report.registered.length, BUILTIN_COUNT - 1, 'scribe 被剪枝后剩 内置角色数 - 1 在册')
     assert.ok(!report.registered.some((r) => r.toolName === 'scribe'))
-    // 记账正确性：7 条旧 fiber + scribe 在重组装中新建又判 invalid 的 1 条 = 8 次 dispose
-    assert.equal(fake.calls.disposes.length, 8, JSON.stringify(fake.calls.disposes.map((c) => c.toolName)))
+    // 记账正确性：内置角色数条旧 fiber + scribe 在重组装中新建又判 invalid 的 1 条 = N+1 次 dispose
+    assert.equal(fake.calls.disposes.length, BUILTIN_COUNT + 1, JSON.stringify(fake.calls.disposes.map((c) => c.toolName)))
     assert.equal(fake.calls.disposes.filter((c) => c.toolName === 'scribe').length, 2, 'scribe 新旧两条 fiber 均须 dispose')
     assert.ok(!fake.calls.announcements.at(-1).includes('`scribe`'), '末次公告不得再含被剪枝的 scribe')
     console.log(`    invalid[0]: ${JSON.stringify(report.invalid[0])}`)
@@ -2310,10 +2337,10 @@ await okAsync('v0.6 注册链：预设先于 fiber 注册、cfg 携带正确 pre
     const fake = makeComposeCtx({ agentPresets: presets.service, loader: makeContractLoader(), trace })
     await apply(fake.ctx, { debounceMs: 1, maxWaitMs: 5 })
     const report = await waitForReport(reportPathOf(tmp), 8000)
-    assert.equal(report.registered.length, 7)
+    assert.equal(report.registered.length, BUILTIN_COUNT)
     // ① 顺序：每个角色都必须「先 register preset，再 ctx.plugin」
     const events = trace.filter((e) => e[0] === 'register' || e[0] === 'fiber-register')
-    assert.deepEqual(events.map((e) => e[0]), Array.from({ length: 7 }, () => ['register', 'fiber-register']).flat())
+    assert.deepEqual(events.map((e) => e[0]), Array.from({ length: BUILTIN_COUNT }, () => ['register', 'fiber-register']).flat())
     // ② preset id 按生效表顺序，一角色一个
     assert.deepEqual(
       trace.filter((e) => e[0] === 'register').map((e) => e[1]),
@@ -2348,14 +2375,14 @@ await okAsync('v0.6 原子回滚：fiber 注册抛 → 该 preset 被 dispose，
     await apply(fake.ctx, { debounceMs: 1, maxWaitMs: 5 })
     const report = await waitForReport(reportPathOf(tmp), 8000)
     assert.deepEqual(report.failed, ['planner'])
-    assert.equal(report.registered.length, 6)
+    assert.equal(report.registered.length, BUILTIN_COUNT - 1)
     assert.deepEqual(
       presets.calls.filter((c) => c[0] === 'preset-dispose').map((c) => c[1]),
       ['rolegroup-planner'],
       '失败角色的 preset 必须被回滚回收',
     )
     assert.equal(presets.definitions.has('rolegroup-planner'), false)
-    assert.equal(presets.definitions.size, 6, '其余 6 个 preset 仍在')
+    assert.equal(presets.definitions.size, BUILTIN_COUNT - 1, '其余 preset 仍在')
   } finally {
     __setTestOverrides(undefined)
     if (prevHome === undefined) delete process.env.DSH_HOME
@@ -2385,8 +2412,8 @@ await okAsync('v0.6 回收顺序：重组装时先 fiber 后 preset，一一对�
     entry.setRoles([{ toolName: 'coder', provider: 'kimi-coding', model: 'k3' }])
     fake.fireVolatile()
     timers.advance(300)
-    // mergeRoles 恒以内置表为底：面板新增一行也只覆盖，生效表仍是 7 个角色 → 重组装是 7→7
-    await waitForCond(() => presets.calls.filter((c) => c[0] === 'register').length === 14, '重组装完成（7+7）', 8000)
+    // mergeRoles 恒以内置表为底：面板新增一行也只覆盖，生效表仍是全部内置角色 → 重组装是 N→N
+    await waitForCond(() => presets.calls.filter((c) => c[0] === 'register').length === BUILTIN_COUNT * 2, '重组装完成（N+N）', 8000)
     const idxOf = (event, id) => trace.findIndex((e) => e[0] === event && e[1] === id)
     for (const name of Object.keys(DEFAULT_ROLES)) {
       const fiberIdx = idxOf('fiber-dispose', name)
@@ -2417,12 +2444,12 @@ await okAsync('v0.6 early effect：apply 开头注册回收 effect，清理时 d
     const fake = makeComposeCtx({ agentPresets: presets.service, loader: makeContractLoader() })
     await apply(fake.ctx, { debounceMs: 1, maxWaitMs: 5 })
     await waitForReport(reportPathOf(tmp), 8000)
-    assert.equal(presets.definitions.size, 7)
+    assert.equal(presets.definitions.size, BUILTIN_COUNT)
     const disposers = fake.calls.effectCleanups.filter((fn) => typeof fn === 'function')
     assert.ok(disposers.length >= 1, 'early effect 必须提供清理函数')
     await Promise.all(disposers.map((fn) => fn()))
     assert.equal(presets.definitions.size, 0, '卸载后不得有孤儿 preset')
-    assert.equal(fake.calls.disposes.length, 7, '7 个 fiber 都必须 dispose')
+    assert.equal(fake.calls.disposes.length, BUILTIN_COUNT, '全部 fiber 都必须 dispose')
   } finally {
     __setTestOverrides(undefined)
     if (prevHome === undefined) delete process.env.DSH_HOME
@@ -2446,7 +2473,7 @@ await okAsync('v0.6 重载幂等：同一 registry 上二次 apply 不撞重复 
     // 二次 apply（同 registry 实例）
     await apply(fake.ctx, { debounceMs: 1, maxWaitMs: 5 })
     await waitForCond(
-      () => presets.calls.filter((c) => c[0] === 'register').length === 14,
+      () => presets.calls.filter((c) => c[0] === 'register').length === BUILTIN_COUNT * 2,
       '二次 apply 注册 7 个 preset',
       8000,
     )
@@ -2454,7 +2481,7 @@ await okAsync('v0.6 重载幂等：同一 registry 上二次 apply 不撞重复 
       !fake.logs.error.some((m) => m.includes('Duplicate agent preset')),
       `不得出现重复 id 错误：${JSON.stringify(fake.logs.error)}`,
     )
-    assert.equal(presets.definitions.size, 7)
+    assert.equal(presets.definitions.size, BUILTIN_COUNT)
   } finally {
     __setTestOverrides(undefined)
     if (prevHome === undefined) delete process.env.DSH_HOME
@@ -2674,16 +2701,16 @@ await okAsync('v0.6 剪枝路径：只有 deepseek-official 时 5 个角色按�
     await apply(fake.ctx, { debounceMs: 1, maxWaitMs: 5 })
     const report = await waitForReport(reportPathOf(tmp), 8000)
     assert.deepEqual(report.invalid, [], '内置链应消化 provider 缺失，不剪枝')
-    assert.equal(report.registered.length, 7, '7 个角色都应注册（5 个走备用档）')
-    for (const name of ['analyst', 'planner', 'coder', 'reviewer', 'scribe']) {
+    assert.equal(report.registered.length, BUILTIN_COUNT, '所有角色都应注册（不可用主路由走备用档）')
+    for (const name of ['analyst', 'planner', 'coder', 'reviewer', 'scribe', 'vision']) {
       const row = report.registered.find((r) => r.toolName === name)
       assert.equal(row.degraded, true, `${name} 必须标记为降级`)
       assert.equal(row.provider, 'deepseek-official', `${name} 必须落到 deepseek-official`)
       assert.ok(typeof row.primary === 'string' && row.primary.includes('/'), `${name} 必须记录原路由`)
     }
     assert.equal(report.registered.find((r) => r.toolName === 'scout').degraded, undefined, '主路由可用的角色不得标降级')
-    assert.equal(presets.definitions.size, 7, 'preset 全部保留（模型不属于 preset）')
-    assert.deepEqual(fake.calls.disposes.map((c) => c.toolName).sort(), ['analyst', 'coder', 'planner', 'reviewer', 'scribe'],
+    assert.equal(presets.definitions.size, BUILTIN_COUNT, 'preset 全部保留（模型不属于 preset）')
+    assert.deepEqual(fake.calls.disposes.map((c) => c.toolName).sort(), ['analyst', 'coder', 'planner', 'reviewer', 'scribe', 'vision'],
       '降级角色重挂 fiber：旧 fiber 必须 dispose')
   } finally {
     __setTestOverrides(undefined)
@@ -2705,7 +2732,7 @@ await okAsync('v0.6 重复 id：该角色 failed、其余照常注册（v0.6/A7�
     await apply(fake.ctx, { debounceMs: 1, maxWaitMs: 5 })
     const report = await waitForReport(reportPathOf(tmp), 8000)
     assert.deepEqual(report.failed, ['planner'], '只有冲突角色失败，其余不受影响')
-    assert.equal(report.registered.length, 6)
+    assert.equal(report.registered.length, BUILTIN_COUNT - 1)
     assert.ok(
       fake.logs.error.some((m) => m.includes('planner') && m.includes('Duplicate agent preset')),
       `日志须带 actionable 的重复 id 错误：${JSON.stringify(fake.logs.error)}`,
@@ -2792,7 +2819,7 @@ await okAsync('v0.6 契约缺席时重组装：failed[] 仍须全量（fail-loud
     const entry = makeEntryConfig([], true)
     await apply(fake.ctx, entry.config)
     timers.advance(3000) // 首次终验
-    await readReportWhen(tmp, (r) => Array.isArray(r.failed) && r.failed.length === 7)
+    await readReportWhen(tmp, (r) => Array.isArray(r.failed) && r.failed.length === BUILTIN_COUNT)
     // 面板保存 → volatile 热重组装（此时契约仍缺席）
     entry.setRoles([{ toolName: 'coder', provider: 'kimi-coding', model: 'k3' }])
     fake.fireVolatile()
@@ -3097,7 +3124,7 @@ await okAsync('config-info: apply 真的装上路由，快照按当前生效层�
     assert.equal(payload.ok, true)
     assert.equal(payload.active, 'builtin', '无 jsonc + 面板未接管 → 内置表')
     assert.equal(payload.file, null)
-    assert.equal(payload.effective.roles.length, 7, '内置 7 角色必须全部出现在生效表')
+    assert.equal(payload.effective.roles.length, BUILTIN_COUNT, '内置角色必须全部出现在生效表')
     assert.ok(payload.effective.roles.every((role) => role.from === 'builtin'), JSON.stringify(payload.effective.roles))
   } finally {
     __setTestOverrides(undefined)
@@ -3125,7 +3152,7 @@ ok('config-info: 两端端点一致 + host apply 接线（source-level 防漂移
 // 假 ctx 只提供 remote.session.modelCatalog()。全部离线、零真实计时器（setImmediate 仅作微任务冲刷，沿用既有先例）。
 import { RolegroupCardController } from '../src/client/controller.js'
 
-const SECTION7 = () => rolesToSection(mergeRoles(undefined).roles) // 7 行内置表（每个用例独立拷贝）
+const SECTION_ALL = () => rolesToSection(mergeRoles(undefined).roles) // 全量内置表（每个用例独立拷贝）
 
 function makeFakeScope({ value, base, user, revision = 3, writable = true, status = 'ready' }) {
   let snapshot = { status, value, base, user, revision, writable, mode: 'host' }
@@ -3181,8 +3208,8 @@ const flushMicrotasks = () => new Promise((r) => setImmediate(r))
 const IDLE_CTX = () => makeFakeClientCtx({ ok: true, value: { groups: [], failures: [] } })
 
 ok('controller: 投影初始态——available/writable 取自 scope、rows=生效值 7 行、dirty:false、basePresent、catalog 懒加载（v0.3/AC-20）', () => {
-  const section = SECTION7()
-  const scope = makeFakeScope({ value: section, base: SECTION7(), user: undefined })
+  const section = SECTION_ALL()
+  const scope = makeFakeScope({ value: section, base: SECTION_ALL(), user: undefined })
   const ctx = IDLE_CTX()
   const controller = new RolegroupCardController(scope, ctx)
   const face = controller.inject()
@@ -3193,7 +3220,7 @@ ok('controller: 投影初始态——available/writable 取自 scope、rows=生�
   assert.equal(proj.saving, false)
   assert.equal(proj.failed, false)
   assert.equal(proj.conflicted, false)
-  assert.equal(proj.rows.length, 7)
+  assert.equal(proj.rows.length, BUILTIN_COUNT)
   const first = proj.rows[0]
   assert.equal(first.toolName, 'analyst')
   assert.equal(first.provider, 'qwen-token-plan-cn')
@@ -3214,9 +3241,9 @@ ok('controller: 投影初始态——available/writable 取自 scope、rows=生�
 })
 
 ok('controller: editRole 更新该行投影并置 dirty；discard 回落生效值（v0.3/AC-21）', () => {
-  const section = SECTION7()
+  const section = SECTION_ALL()
   const origModel = section.roles.find((r) => r.toolName === 'coder').model
-  const scope = makeFakeScope({ value: section, base: SECTION7(), user: undefined })
+  const scope = makeFakeScope({ value: section, base: SECTION_ALL(), user: undefined })
   const controller = new RolegroupCardController(scope, IDLE_CTX())
   const face = controller.inject()
   face.editRole('coder', 'model', 'k3-x')
@@ -3230,8 +3257,8 @@ ok('controller: editRole 更新该行投影并置 dirty；discard 回落生效�
 })
 
 await okAsync('controller: save 恰好一次 mutate——ops=[set enabled, set roles 整表]、expectedRevision=起草时 revision（v0.4/AC-14）', async () => {
-  const section = SECTION7()
-  const scope = makeFakeScope({ value: section, base: SECTION7(), user: undefined, revision: 3 })
+  const section = SECTION_ALL()
+  const scope = makeFakeScope({ value: section, base: SECTION_ALL(), user: undefined, revision: 3 })
   const controller = new RolegroupCardController(scope, IDLE_CTX())
   const face = controller.inject()
   face.editRole('coder', 'model', 'k3-x')
@@ -3247,7 +3274,7 @@ await okAsync('controller: save 恰好一次 mutate——ops=[set enabled, set r
   assert.equal(ops[0].value, true, '保存必须同时置 enabled=true，否则 host 仍视为未接管')
   assert.equal(ops[1].op, 'set')
   assert.deepEqual(ops[1].path, ['roles'])
-  assert.equal(ops[1].value.length, 7)
+  assert.equal(ops[1].value.length, BUILTIN_COUNT)
   assert.deepEqual(ops[1].value.map((r) => r.toolName), section.roles.map((r) => r.toolName))
   const coder = ops[1].value.find((r) => r.toolName === 'coder')
   assert.equal(coder.model, 'k3-x')
@@ -3260,12 +3287,12 @@ await okAsync('controller: save 恰好一次 mutate——ops=[set enabled, set r
 })
 
 await okAsync('controller: 起草后外部推进 revision（模拟他人保存）→ save 不发起 mutate 且 conflicted:true（v0.3/AC-23）', async () => {
-  const section = SECTION7()
-  const scope = makeFakeScope({ value: section, base: SECTION7(), user: undefined, revision: 3 })
+  const section = SECTION_ALL()
+  const scope = makeFakeScope({ value: section, base: SECTION_ALL(), user: undefined, revision: 3 })
   const controller = new RolegroupCardController(scope, IDLE_CTX())
   const face = controller.inject()
   face.editRole('coder', 'model', 'k3-x')
-  const external = SECTION7()
+  const external = SECTION_ALL()
   external.roles.find((r) => r.toolName === 'scribe').model = 'other-model'
   scope.advanceExternal(external)
   let proj = face.hooks.rolegroupCard.getSnapshot()
@@ -3279,8 +3306,8 @@ await okAsync('controller: 起草后外部推进 revision（模拟他人保存�
 })
 
 await okAsync('controller: resetToBase 清用户层（enabled + roles 两个 unset）→ 真正退出接管、rows 回落 base 层值（v0.4/AC-14）', async () => {
-  const base = SECTION7()
-  const userTable = SECTION7()
+  const base = SECTION_ALL()
+  const userTable = SECTION_ALL()
   userTable.roles.find((r) => r.toolName === 'coder').model = 'user-x'
   const scope = makeFakeScope({ value: userTable, base, user: userTable, revision: 5 })
   const controller = new RolegroupCardController(scope, IDLE_CTX())
@@ -3302,8 +3329,8 @@ await okAsync('controller: resetToBase 清用户层（enabled + roles 两个 uns
 })
 
 await okAsync('controller: catalog 懒加载 + 合并——ready/partial、已存路由不在目录 → 保留为 available:false 选项（v0.3/AC-25）', async () => {
-  const section = SECTION7()
-  const scope = makeFakeScope({ value: section, base: SECTION7(), user: undefined })
+  const section = SECTION_ALL()
+  const scope = makeFakeScope({ value: section, base: SECTION_ALL(), user: undefined })
   const ctx = makeFakeClientCtx({ ok: true, value: {
     groups: [{ id: 'kimi-coding', name: 'Kimi Coding', models: [{ id: 'k3', name: 'K3' }] }],
     failures: ['provider x 超时'],
@@ -3329,14 +3356,14 @@ await okAsync('controller: catalog 懒加载 + 合并——ready/partial、已�
 })
 
 await okAsync('controller: addRole/removeRole 增删草稿行；非法行（空 provider）投影 invalidFields 且 save 本地拦截（v0.3/AC-26）', async () => {
-  const section = SECTION7()
-  const scope = makeFakeScope({ value: section, base: SECTION7(), user: undefined })
+  const section = SECTION_ALL()
+  const scope = makeFakeScope({ value: section, base: SECTION_ALL(), user: undefined })
   const controller = new RolegroupCardController(scope, IDLE_CTX())
   const face = controller.inject()
   face.addRole()
   let proj = face.hooks.rolegroupCard.getSnapshot()
-  assert.equal(proj.rows.length, 8)
-  const added = proj.rows[7]
+  assert.equal(proj.rows.length, BUILTIN_COUNT + 1)
+  const added = proj.rows[BUILTIN_COUNT]
   assert.ok(TOOL_NAME_RE.test(added.toolName), `生成的工具名必须合法：${added.toolName}`)
   assert.equal(added.isCustom, true)
   assert.ok(added.invalidFields.includes('provider'), JSON.stringify(added.invalidFields))
@@ -3352,14 +3379,14 @@ await okAsync('controller: addRole/removeRole 增删草稿行；非法行（空 
   assert.deepEqual(proj.rows[7].invalidFields, [])
   face.removeRole(added.toolName)
   proj = face.hooks.rolegroupCard.getSnapshot()
-  assert.equal(proj.rows.length, 7)
+  assert.equal(proj.rows.length, BUILTIN_COUNT)
   assert.equal(proj.dirty, false, '增后又删回必须与生效值一致')
 })
 
 await okAsync('controller: 配置文件按钮——fetch 后把路径交给右侧栏；无文件/右侧栏不可用/HTTP 失败都内联投影（config-viewer/AC-3）', async () => {
-  const section = SECTION7()
+  const section = SECTION_ALL()
   const makeController = (fetchImpl, openConfigFile) => new RolegroupCardController(
-    makeFakeScope({ value: section, base: SECTION7(), user: undefined }),
+    makeFakeScope({ value: section, base: SECTION_ALL(), user: undefined }),
     makeFakeClientCtx({ ok: true, value: { groups: [], failures: [] } }),
     { fetch: fetchImpl, openConfigFile },
   )
@@ -3426,7 +3453,7 @@ await okAsync('controller: 未接管时用 host 生效表预填——默认有�
     { toolName: 'analyst', provider: 'qwen-token-plan-cn', model: 'qwen3.8-flash', persona: '分析人格', summary: '需求澄清', reasoningEffort: 'high', from: 'file' },
     { toolName: 'my_role', provider: 'kimi-coding', model: 'k3', persona: '自定义人格', summary: '自定义职责', from: 'file' },
   ]
-  const scope = makeFakeScope({ value: { roles: [] }, base: SECTION7(), user: undefined, revision: 3 })
+  const scope = makeFakeScope({ value: { roles: [] }, base: SECTION_ALL(), user: undefined, revision: 3 })
   const controller = new RolegroupCardController(
     scope,
     makeFakeClientCtx({ ok: true, value: { groups: [], failures: [] } }),
@@ -3461,7 +3488,7 @@ await okAsync('controller: 未接管时用 host 生效表预填——默认有�
 
 await okAsync('controller: 预填读取失败 → 错误投影 + 重试；失败时仍可手动新增（prefill/AC-2）', async () => {
   let fail = true
-  const scope = makeFakeScope({ value: { roles: [] }, base: SECTION7(), user: undefined })
+  const scope = makeFakeScope({ value: { roles: [] }, base: SECTION_ALL(), user: undefined })
   const controller = new RolegroupCardController(
     scope,
     makeFakeClientCtx({ ok: true, value: { groups: [], failures: [] } }),
@@ -3501,7 +3528,7 @@ await okAsync('controller: 绝不读 ctx.fetch——cordis 严格属性访问会
       throw new Error(`cannot get property "${String(prop)}" without inject`)
     },
   })
-  const scope = makeFakeScope({ value: { roles: [] }, base: SECTION7(), user: undefined })
+  const scope = makeFakeScope({ value: { roles: [] }, base: SECTION_ALL(), user: undefined })
   const controller = new RolegroupCardController(scope, strictCtx, {
     fetch: async () => ({ ok: true, json: async () => ({ ok: true, effective: { roles: [{ toolName: 'scout', provider: 'deepseek-official', model: 'deepseek-flash' }] } }) }),
   })
@@ -3515,8 +3542,8 @@ await okAsync('controller: 绝不读 ctx.fetch——cordis 严格属性访问会
 })
 
 await okAsync('controller: 推理档位按模型目录校验——非法值标红并拦截保存；切模型清掉不支持的旧档位（reasoning-effort/AC-1）', async () => {
-  const section = SECTION7()
-  const scope = makeFakeScope({ value: section, base: SECTION7(), user: undefined })
+  const section = SECTION_ALL()
+  const scope = makeFakeScope({ value: section, base: SECTION_ALL(), user: undefined })
   const ctx = makeFakeClientCtx({
     ok: true,
     value: {
@@ -3579,7 +3606,7 @@ await okAsync('controller: provider 未注册 → routeGaps 提示 + 一键补�
     ...(withDefault ? { default: { provider: 'deepseek-official', model: 'deepseek-v4-pro' } } : {}),
   })
   const makeController = (catalog) => {
-    const scope = makeFakeScope({ value: { roles: [] }, base: SECTION7(), user: undefined })
+    const scope = makeFakeScope({ value: { roles: [] }, base: SECTION_ALL(), user: undefined })
     const controller = new RolegroupCardController(scope, makeFakeClientCtx({ ok: true, value: catalog }), {
       fetch: async () => ({ ok: true, json: async () => ({ ok: true, effective: { roles: effective } }) }),
     })
@@ -3858,7 +3885,7 @@ await okAsync('client-meta: 版本号唯一真源 = package.json，仓库地址�
 })
 
 ok('controller: takeover 投影随 host 的 enabled 位变化（v0.5/AC-14）', () => {
-  const section = SECTION7()
+  const section = SECTION_ALL()
   const off = new RolegroupCardController(makeFakeScope({ value: section, base: section }), IDLE_CTX())
   assert.equal(off.inject().hooks.rolegroupCard.getSnapshot().takeover, false)
   const on = new RolegroupCardController(makeFakeScope({ value: { ...section, enabled: true }, base: section }), IDLE_CTX())

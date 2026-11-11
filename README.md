@@ -6,7 +6,7 @@ dsh 的角色化委派插件。先定义角色（名字、绑定模型、persona
 角色/类别绑定的思路参考了 [oh-my-openagent](https://github.com/code-yeongyu/oh-my-openagent)（omo），
 详见 §10。
 
-> 版本 **0.7.0** ｜ 要求 dsh **≥ 0.2.1-rc.1**（本机实测 0.2.1-rc.3）｜ MIT
+> 版本 **0.8.0** ｜ 要求 dsh **≥ 0.2.1-rc.1**（本机实测 0.2.1-rc.3）｜ MIT
 
 ---
 
@@ -95,14 +95,14 @@ home 层不会被 profile 重写覆盖，但不会出现在「已安装」组，
 dsh --profile web --dump-config | grep -A1 dsh-rolegroup   # 应出现 - id: dsh-rolegroup
 ```
 
-重启 `dsh web`，开一个新会话。工具列表里应该出现 7 个角色工具；也可以在新会话里跑
+重启 `dsh web`，开一个新会话。工具列表里应该出现 8 个角色工具；也可以在新会话里跑
 `/rolegroup doctor`。
 
 改代码或 `rolegroup.jsonc` 后需要重启并开新会话。面板保存怎么生效，见 §5。
 
 ## 3. 内置角色
 
-没有任何配置时，插件会注册这 7 个角色。下表是内置初值，可以被 `rolegroup.jsonc` 或面板覆盖。
+没有任何配置时，插件会注册这 8 个角色。下表是内置初值，可以被 `rolegroup.jsonc` 或面板覆盖。
 
 表里只写**模型名称**：同一个模型往往有多条路由（订阅套餐、按量计费、聚合网关），具体 provider 由你的配置
 决定。内置默认绑定指向内置表里的 provider（作者的订阅），在你的机器上可用 `/rolegroup init` 生成一套本机
@@ -116,10 +116,21 @@ dsh --profile web --dump-config | grep -A1 dsh-rolegroup   # 应出现 - id: dsh
 | `reviewer` | Qwen3.8 Max | 收口审查：逐项核对验收标准与证据（做没做到） |
 | `scout` | DeepSeek V4.1 Flash | 探索定位、批量搜索（返回 `文件:行号` 证据） |
 | `scribe` | Qwen3.8 Flash | 文档回填、报告、spec 维护 |
+| `vision` | Qwen3.8 Flash | 看图：图片分析、UI 评审、原型识别、OCR（**要求绑定模型支持图片输入**） |
 | `fallback` | DeepSeek V4.1 Flash | 未分类的轻量任务兜底 |
 
+> **`vision` 的选型依据**（不是推断）：① 作者在 omo 里长期用 `qwen3.8-flash` 做图片分析/UI 评审；
+> ② 本项目委托链路探针（`evals` 的 `scout-02`，子会话跑像素字体 OCR）中 `qwen3.8-flash` 得 10/10，
+> 而同批 `MiniMax-M3` 只有 4/10 且**编造**了候选字符串——所以它的备用链只放 `deepseek-flash`（同样 10/10
+> 且是唯一保证注册的 provider），`M3` 明确排除、`v4-pro` 因视觉未测也不放。
+>
+> **怎么用**：委派只能传文字，所以把**图片路径**写进简报，例如
+> 「用 vision 分析 `/tmp/ui.png`，检查间距与对比度」。角色会自己调 `read_image`。
+> 上游没有「视觉能力位」，插件**无法在启动期校验**模型是否支持图片——换成自己的模型后，
+> 先用一张含明确文字的图跑一次，能正确读出文字即视为可用。
+
 每个角色由一个委派工具实例和一个自动生成的 Agent Preset 组成。Preset 复制你默认会话模式的组合，
-换掉 persona，再去掉委派组。所以「设置 → Agent 预设」里会看到 7 个「角色：xxx · 模型」。这些 preset 是自动
+换掉 persona，再去掉委派组。所以「设置 → Agent 预设」里会看到 8 个「角色：xxx · 模型」。这些 preset 是自动
 生成的，不要删除或改名，也不要把主会话选成它们。
 
 ## 4. 配置
@@ -298,7 +309,7 @@ fallback deepseek-official/deepseek-flash ✅       ✅
 ```sh
 npm run link:deps     # 首次 clone 后先跑：建 schemastery 软链
 npm install           # 再装 devDependency esbuild
-npm test              # 离线 smoke test，148 项；pretest 会自动跑 link:deps
+npm test              # 离线 smoke test，149 项；pretest 会自动跑 link:deps
 npm run build:client  # 改了 src/client/** 或 lib/roles.js 后重建 lib/client.js
 ```
 

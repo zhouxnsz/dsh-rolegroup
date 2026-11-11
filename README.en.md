@@ -7,7 +7,7 @@ instance, so the tool name is the role name.
 The role/category binding is inspired by
 [oh-my-openagent](https://github.com/code-yeongyu/oh-my-openagent) ("omo"); see §10.
 
-> Version **0.7.0** ｜ dsh **≥ 0.2.1-rc.1** (verified on 0.2.1-rc.3) ｜ MIT
+> Version **0.8.0** ｜ dsh **≥ 0.2.1-rc.1** (verified on 0.2.1-rc.3) ｜ MIT
 
 ---
 
@@ -102,14 +102,14 @@ one; do not use both.
 dsh --profile web --dump-config | grep -A1 dsh-rolegroup   # should show - id: dsh-rolegroup
 ```
 
-Restart `dsh web` and open a new session. The seven role tools should be in the tool list; you can also run
+Restart `dsh web` and open a new session. The eight role tools should be in the tool list; you can also run
 `/rolegroup doctor` from the new session.
 
 After changing code or `rolegroup.jsonc`, restart and open a new session. For panel saves, see §5.
 
 ## 3. Built-in roles
 
-With no configuration, the plugin registers seven roles. The models below are initial values;
+With no configuration, the plugin registers eight roles. The models below are initial values;
 `rolegroup.jsonc` or the panel can override them.
 
 The table names models only: one model usually has several routes (subscription plan, pay-as-you-go, gateway),
@@ -125,7 +125,20 @@ them in the panel. Model ids and the effective routes are whatever `/rolegroup d
 | `reviewer` | Qwen3.8 Max | Closing review: check acceptance criteria against evidence (was it actually done) |
 | `scout` | DeepSeek V4.1 Flash | Exploration and bulk search (returns `file:line` evidence) |
 | `scribe` | Qwen3.8 Flash | Documentation backfill, reports, spec maintenance |
+| `vision` | Qwen3.8 Flash | Vision: image analysis, UI review, prototype reading, OCR (**the bound model must accept images**) |
 | `fallback` | DeepSeek V4.1 Flash | Catch-all for unclassified lightweight tasks |
+
+> **Why `vision` is bound to `qwen3.8-flash`** (evidence, not guesswork): ① the author used it for image
+> analysis / UI review in omo for a long time; ② this project's delegation-path probe (`scout-02` in `evals`,
+> a pixel-font OCR run **inside a child session**) scored it 10/10, while `MiniMax-M3` scored 4/10 and
+> **fabricated** candidate strings in the same batch. Its fallback chain therefore only carries
+> `deepseek-flash` (also 10/10, and the one provider dsh always registers); `M3` is excluded and `v4-pro` is
+> left out because its vision support is untested.
+>
+> **How to use it**: delegation carries text only, so put the **image path** in the brief, e.g.
+> "have vision analyze `/tmp/ui.png` for spacing and contrast". The role calls `read_image` itself.
+> Upstream exposes no "vision capability" flag, so the plugin **cannot validate it at startup** — if you bind
+> another model, run it once on an image with known text and check that it reads the text correctly.
 
 Each role is a delegation-tool instance plus an auto-generated Agent Preset. The preset copies your default
 session mode, replaces the persona, and removes the delegation group. That is why Settings → Agent presets
@@ -332,7 +345,7 @@ fails to activate goes into `invalid[]` and is not registered.
 ```sh
 npm run link:deps     # first after cloning: create the schemastery symlink
 npm install           # then install the esbuild devDependency
-npm test              # offline smoke suite, 148 cases; pretest runs link:deps
+npm test              # offline smoke suite, 149 cases; pretest runs link:deps
 npm run build:client  # after editing src/client/** or lib/roles.js
 ```
 
