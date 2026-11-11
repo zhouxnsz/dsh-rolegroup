@@ -210,6 +210,10 @@ dsh --profile web --dump-config | grep -A1 dsh-rolegroup   # 应出现 - id: dsh
   所以没有 qwen / Kimi 订阅时也能跑；**显式配置的角色不自动降级**，provider 不在册就不注册，日志和
   doctor 给出修复提示。模型不在可用列表里只警告，委派时再校验。
 - `maxDepth` 是 1：主会话可以委派，角色子代理不能再委派。配成 0 会把顶层委派也挡掉。
+  实现细节（实测，别误解）：角色 preset 剔除了**委派组**，所以子会话里看不到 `subagent` /
+  `subagent_fork` / `workflow`；但 8 个**角色工具是 host 平面**注册的，子会话的工具列表里仍能看到它们，
+  调用会在运行期被 `maxDepth` 拒绝。上游 0.2.1 移除了 `toolFilter`，插件无法把 host 工具从子会话隐藏——
+  这是已知限制（噪音，不是逃逸）。
 - 改 `rolegroup.jsonc` 不会热生效，需要重启并开新会话。面板保存对新会话生效（见 §5）。
 - 备用链只在**启动期**解析：dsh 的角色工具在注册时就固定了模型，所以链是「启动挑一条」，不是 omo 那种
   运行时按 429 切换；`llm/adapters-updated` 会让插件重组装并重新解析。

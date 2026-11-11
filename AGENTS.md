@@ -92,6 +92,10 @@ graph/team 运行时）。它有值得学的点（**能力矩阵进系统提示*
 - **preset 健康审计只能在 finalize 做**：在 apply（宿主 row activation）里调 `list()/resolve()` 会触发
   registry `await owner.loader.await()` **自等挂死**；审计异常/超时必须只 warn，且**报告必须写出**。
 - **`maxDepth` 配 `0` 会把顶层委派也挡掉**，不只是禁止套娃。
+- **角色工具在子会话里可见 ≠ 可再委派**（v0.8 实测）：角色 preset 剔除的是**委派组**（`subagent` /
+  `subagent_fork` / `workflow` / `list_agents`），但 8 个角色工具注册在 **host 平面**，因此子会话工具列表里
+  仍能看到它们；调用由 `maxDepth: 1` 在运行期拒绝（`childDepth 2 > 1`）。上游 0.2.1 移除了 `toolFilter`，
+  插件无法把 host 工具从子会话隐藏——**这是已知噪音，不是逃逸**；写文档/断言时别声称"子会话看不到角色工具"。
 - **`reasoningEffort` 不是自由文本**：必须落在模型目录声明的档位内，否则委派预检失败。客户端面板按目录
   渲染下拉（空 = 模型默认档位），非法值标红并阻止保存，切换模型时清掉新模型不支持的旧值；内置角色
   刻意留空，让各模型使用默认档位。

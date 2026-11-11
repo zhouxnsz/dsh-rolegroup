@@ -3065,7 +3065,9 @@ await okAsync('config-info route 加固：请求 URL/查询串不得影响快照
   let clean = makeHttpExchange('GET', '127.0.0.1')
   await route.handler(clean.request, clean.response)
   assert.equal(clean.response.status, 200)
-  const cleanPayload = JSON.parse(clean.response.body)
+  // generatedAt 是时间戳：跨毫秒必然不相等，比较时必须剔除（否则断言随调度抖动 flaky）
+  const stableOf = (body) => { const { generatedAt, ...rest } = JSON.parse(body); return rest }
+  const cleanPayload = stableOf(clean.response.body)
 
   // ② 恶意/可疑查询串：handler 必须完全忽略（它从**内存快照**取数，不按请求读盘）
   const malicious = [
@@ -3079,7 +3081,7 @@ await okAsync('config-info route 加固：请求 URL/查询串不得影响快照
     exchange.request.url = url
     await route.handler(exchange.request, exchange.response)
     assert.equal(exchange.response.status, 200, url)
-    assert.deepEqual(JSON.parse(exchange.response.body), cleanPayload, `查询串不得改变快照内容：${url}`)
+    assert.deepEqual(stableOf(exchange.response.body), cleanPayload, `查询串不得改变快照内容：${url}`)
   }
   assert.equal(buildCalls, 1 + malicious.length, '每次请求恰好调用一次 buildInfo（不按参数分支读盘）')
 

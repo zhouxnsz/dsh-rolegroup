@@ -230,6 +230,11 @@ To see which layer is active, read the "config source" line from `/rolegroup doc
   only produces a warning; the role is still registered and delegation checks it again.
 - `maxDepth` is 1: the main session can delegate, role subagents cannot. Setting it to 0 also blocks
   top-level delegation.
+  Implementation detail (measured, easy to misread): the role preset drops the **delegation group**, so
+  `subagent` / `subagent_fork` / `workflow` do not appear in child sessions. The eight **role tools** are
+  registered on the host plane, though, so they still show up in a child's tool list; calling one is
+  rejected at runtime by `maxDepth`. Upstream 0.2.1 removed `toolFilter`, so the plugin cannot hide host
+  tools from children — a known limitation (noise, not an escape).
 - Changes to `rolegroup.jsonc` are not hot-applied; restart and open a new session. Panel saves apply to new
   sessions (see §5).
 - Chains resolve at **startup only**: a dsh role tool fixes its model when it is registered, so a chain picks
