@@ -2984,6 +2984,57 @@ await okAsync('config-info route: 只读 + 仅本机；GET/HEAD 200、非本机 
   assert.deepEqual(warns, [], '缺少可选能力属于正常降级，不该 warn')
 })
 
+await okAsync('config-info route 加固：请求 URL/查询串不得影响快照（无任意文件读）+ nosniff（v0.7/AC-10）', async () => {
+  let route
+  const ctx = {
+    inject: (deps, cb) => cb({
+      webServer: { register: (registered) => { route = registered; return () => {} } },
+      effect: (fn) => fn(),
+    }),
+  }
+  const SNAPSHOT = {
+    active: 'file',
+    file: { path: '/home/u/.dsh/rolegroup.jsonc', mtimeMs: 1, text: '{ "roles": {} }', error: null, active: true },
+    effective: { roles: [{ toolName: 'coder', provider: 'kimi-coding', model: 'k3', from: 'file' }], problems: [] },
+  }
+  let buildCalls = 0
+  installConfigInfoRoute(ctx, () => { buildCalls += 1; return SNAPSHOT }, { info() {}, warn() {} })
+
+  // ① 基线调用
+  let clean = makeHttpExchange('GET', '127.0.0.1')
+  await route.handler(clean.request, clean.response)
+  assert.equal(clean.response.status, 200)
+  const cleanPayload = JSON.parse(clean.response.body)
+
+  // ② 恶意/可疑查询串：handler 必须完全忽略（它从**内存快照**取数，不按请求读盘）
+  const malicious = [
+    '/api/dsh-rolegroup/config?path=/etc/passwd',
+    '/api/dsh-rolegroup/config?file=/etc/hosts',
+    '/api/dsh-rolegroup/config?cwd=/',
+    '/api/dsh-rolegroup/config?../../../../etc/shadow',
+  ]
+  for (const url of malicious) {
+    const exchange = makeHttpExchange('GET', '127.0.0.1')
+    exchange.request.url = url
+    await route.handler(exchange.request, exchange.response)
+    assert.equal(exchange.response.status, 200, url)
+    assert.deepEqual(JSON.parse(exchange.response.body), cleanPayload, `查询串不得改变快照内容：${url}`)
+  }
+  assert.equal(buildCalls, 1 + malicious.length, '每次请求恰好调用一次 buildInfo（不按参数分支读盘）')
+
+  // ③ 加固头：nosniff 防 MIME 嗅探（JSON 被当脚本解释的经典面）
+  assert.equal(clean.response.headers['x-content-type-options'], 'nosniff', '200 响应必须带 nosniff')
+  const rejected = makeHttpExchange('POST', '127.0.0.1')
+  await route.handler(rejected.request, rejected.response)
+  assert.equal(rejected.response.status, 405)
+  assert.equal(rejected.response.headers['x-content-type-options'], 'nosniff', '405 响应同样要带 nosniff')
+
+  // ④ 127.0.0.0/8 全段视为本机（不能只认 127.0.0.1）
+  const other = makeHttpExchange('GET', '127.0.0.2')
+  await route.handler(other.request, other.response)
+  assert.equal(other.response.status, 200, '127.0.0.0/8 都是回环')
+})
+
 await okAsync('config-info: apply 真的装上路由，快照按当前生效层返回（假 webServer 集成）', async () => {
   const tmp = await mkdtemp(join(tmpdir(), 'dsh-rg-config-'))
   const prevHome = process.env.DSH_HOME

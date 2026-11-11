@@ -231,8 +231,15 @@ add, an inline error, and a retry. Reset to file config clears both fields and e
 
 The header shows the plugin name and version, plus a GitHub link. The Config file button opens the active
 `rolegroup.jsonc` in the right sidebar's document preview. It closes Settings first so the sidebar is visible.
-If there is no config file, it shows a one-line notice in the page instead of a popup. The endpoint is local
-only; host-side code changes need a `dsh web` restart.
+If there is no config file, it shows a one-line notice in the page instead of a popup. Host-side code changes
+need a `dsh web` restart.
+
+> **Endpoint exposure (explicit)**: `GET|HEAD /api/dsh-rolegroup/config` — **loopback only, no authentication,
+> read-only**. It returns the **in-memory snapshot** read at startup (one of the project/user `rolegroup.jsonc`)
+> and **never reads files based on request parameters**, so there is no arbitrary-file-read or path-traversal
+> surface. Any process that can reach the local loopback can already read `~/.dsh`, so this endpoint widens no
+> trust boundary; in multi-user or untrusted-host setups, keep `dsh web` bound to loopback (the default).
+> Responses carry `nosniff`, so they cannot be executed via `<script>`.
 
 Reasoning effort can be left empty, which means the model's default (Kimi K3, for example, defaults to
 `high`). A higher level is usually slower and more expensive, but it reasons more thoroughly. The dropdown options come from
