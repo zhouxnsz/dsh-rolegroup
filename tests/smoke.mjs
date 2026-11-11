@@ -4255,6 +4255,75 @@ await okAsync('client-index: 卡片注册必须带 label（否则 Plugins 页列
   assert.ok(/order:\s*\d+/.test(src), 'settings.section 应给 order（决定导航位置）')
 })
 
+// --- v0.7/AC-11：engines.dsh 必须覆盖当前部署版本 ---
+// 教训（真实事故）：engines.dsh 曾写 `>=0.2.1`，而部署的是 `0.2.1-rc.2`——semver 的 prerelease
+// 被排除，插件市场/插件管理器按 engines.dsh 判兼容 → 卡片直接显示「异常」且跳过 meta（连图标都不读）。
+// 这里把「区间必须覆盖部署版本」变成可执行断言，防止再写回裸 `>=x.y.z`。
+function parseSemver(text) {
+  const m = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/.exec(String(text).trim())
+  if (m === null) return undefined
+  return { nums: [Number(m[1]), Number(m[2]), Number(m[3])], pre: m[4] === undefined ? [] : m[4].split('.') }
+}
+function compareSemver(a, b) {
+  for (let i = 0; i < 3; i += 1) {
+    if (a.nums[i] !== b.nums[i]) return a.nums[i] < b.nums[i] ? -1 : 1
+  }
+  if (a.pre.length === 0 && b.pre.length === 0) return 0
+  if (a.pre.length === 0) return 1 // 正式版 > 同号 prerelease
+  if (b.pre.length === 0) return -1
+  const len = Math.max(a.pre.length, b.pre.length)
+  for (let i = 0; i < len; i += 1) {
+    const x = a.pre[i]
+    const y = b.pre[i]
+    if (x === undefined) return -1
+    if (y === undefined) return 1
+    const xn = /^\d+$/.test(x)
+    const yn = /^\d+$/.test(y)
+    if (xn && yn && Number(x) !== Number(y)) return Number(x) < Number(y) ? -1 : 1
+    if (xn !== yn) return xn ? -1 : 1 // 数字标识符 < 字母标识符
+    if (x !== y) return x < y ? -1 : 1
+  }
+  return 0
+}
+/** 只支持单条下界 `>=x.y.z[-pre]`（本仓库 engines.dsh 的既定形态）；其它写法返回 undefined 交人判断。 */
+function satisfiesLowerBound(range, version) {
+  const m = /^\s*>=\s*(\S+)\s*$/.exec(String(range ?? ''))
+  if (m === null) return undefined
+  const min = parseSemver(m[1])
+  const target = parseSemver(version)
+  if (min === undefined || target === undefined) return undefined
+  return compareSemver(target, min) >= 0
+}
+
+await okAsync('engines.dsh 必须覆盖当前部署树版本（含 prerelease 语义；v0.7/AC-11）', async () => {
+  const pkg = JSON.parse(readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8'))
+  let deployed
+  try {
+    deployed = execFileSync('dsh', ['--version'], { encoding: 'utf8' }).trim()
+  } catch {
+    return // 没有 dsh 可执行文件的环境（tarball/CI）跳过，不误报
+  }
+  assert.ok(parseSemver(deployed), `无法解析 \`dsh --version\` 输出：${deployed}`)
+  const satisfied = satisfiesLowerBound(pkg.engines?.dsh, deployed)
+  assert.notEqual(
+    satisfied, undefined,
+    `engines.dsh 只支持单条下界形式 ">=x.y.z[-pre]"，实为 ${JSON.stringify(pkg.engines?.dsh)}`,
+  )
+  assert.equal(
+    satisfied, true,
+    `engines.dsh=${pkg.engines?.dsh} 不覆盖当前部署版本 ${deployed}——`
+    + '插件市场/管理器按它判兼容，写错会让插件卡片显示「异常」并跳过 meta',
+  )
+  // prerelease 部署时，下界必须显式含 prerelease 标识：`>=0.2.1` 满足不了 `0.2.1-rc.2`
+  if (deployed.includes('-')) {
+    assert.ok(
+      /-/.test(String(pkg.engines.dsh).replace(/^>=/, '')),
+      `部署版本是 prerelease（${deployed}），engines.dsh 下界也必须写成 prerelease（如 >=0.2.1-rc.1），`
+      + '否则 semver 规则下永远不满足',
+    )
+  }
+})
+
 // --- v0.3 GUI 面板 T5c：源码卫生——client 源与 lib 产物均不含字面 NUL 字节（plans/v0.3-gui-panel.md §4 T5，v0.3/AC-28c）---
 // 背景：controller.js 的 keyOf 曾写入一个字面 NUL 字节（offset 10998），使 file/grep 把源码当二进制，
 // 让基于 grep 的断言（如 AC-27 零浏览器依赖检查）失去可见性。运行时语义不受影响（JS 字符串可含 NUL），
