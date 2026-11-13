@@ -3135,6 +3135,58 @@ await okAsync('config-info: apply 真的装上路由，快照按当前生效层�
   }
 })
 
+await okAsync('config-info: 面板保存（volatile 重组装）后快照仍报**配置层生效表**，不退化成覆盖表（v0.9 回归锁）', async () => {
+  const tmp = await mkdtemp(join(tmpdir(), 'dsh-rg-config-drift-'))
+  const prevHome = process.env.DSH_HOME
+  process.env.DSH_HOME = tmp
+  let route
+  try {
+    // 真实定时器 + 毫秒级注入（与相邻 config-info 集成用例同款）：
+    // 假时钟 + volatile 防抖叠用会出现「advance 早于 schedule」的竞态（实测 4/10 偶发超时）。
+    __setTestOverrides({ debounceMs: 1, maxWaitMs: 5, watchDebounceMs: 5 })
+    const fake = makeComposeCtx({
+      injectImpl: (deps, cb) => {
+        if (deps.includes('webServer')) {
+          cb({ webServer: { register: (r) => { route = r; return () => {} } }, effect: (fn) => fn() })
+        }
+      },
+    })
+    // 面板接管：只写 1 行覆盖（模拟老用户的面板表比内置表少）
+    const entry = makeEntryConfig([{ toolName: 'coder', provider: 'kimi-coding', model: 'k3' }], true)
+    await apply(fake.ctx, entry.config)
+    // 只等「终验摘要日志」而不是等报告落盘：本用例验的是快照内容，绕开 fs 时序（曾 5/10 偶发超时）
+    const summaryCount = () => fake.logs.info.concat(fake.logs.warn).filter((m) => m.includes('个角色')).length
+    await waitForCond(() => summaryCount() >= 1, '首次终验完成', 8000)
+    const readPayload = async () => {
+      const exchange = makeHttpExchange('GET', '127.0.0.1')
+      await route.handler(exchange.request, exchange.response)
+      return JSON.parse(exchange.response.body)
+    }
+    const before = await readPayload()
+    assert.equal(before.active, 'panel')
+    assert.equal(before.effective.roles.length, BUILTIN_COUNT,
+      '启动后快照 = 合并后的生效表（覆盖 1 行 + 内置补底）')
+
+    // 触发一次 volatile 重组装（面板保存）后，快照必须**仍**是配置层生效表
+    entry.setRoles([{ toolName: 'builder', provider: 'kimi-coding', model: 'k3' }])
+    fake.fireVolatile()
+    await waitForCond(() => summaryCount() >= 2, '重组装完成', 8000)
+    const after = await readPayload()
+    assert.equal(after.active, 'panel')
+    // 覆盖表只有 1 行（builder），但生效表 = builder + 内置补底（共 N+1 个不同角色）
+    assert.equal(after.effective.roles.length, BUILTIN_COUNT + 1,
+      `重组装后快照不得退化成覆盖表（实际 ${after.effective.roles.length} 行：`
+      + `${after.effective.roles.map((r) => r.toolName).join(',')}）`)
+    assert.ok(after.effective.roles.some((r) => r.toolName === 'builder' && r.from === 'panel'))
+    assert.ok(after.effective.roles.some((r) => r.toolName === 'vision' && r.from === 'builtin'),
+      '新增内置角色必须仍在快照里（这正是原 bug 丢掉的）')
+  } finally {
+    __setTestOverrides(undefined)
+    if (prevHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = prevHome
+  }
+})
+
 ok('config-info: 两端端点一致 + host apply 接线（source-level 防漂移）', () => {
   const hostSrc = readFileSync(fileURLToPath(new URL('../lib/index.js', import.meta.url)), 'utf8')
   const controllerSrc = readFileSync(fileURLToPath(new URL('../src/client/controller.js', import.meta.url)), 'utf8')
