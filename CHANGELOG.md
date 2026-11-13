@@ -8,6 +8,25 @@
 
 ---
 
+## [0.11.3] — 2026-11-13
+
+README 大扫除。用户逐条指出哪几段该删：中文从 422 行降到 205 行，英文同比。
+
+### Changed
+
+- 删掉：角色/doctor 那两条卖点、边界段的引导句、"不为旧 dsh 线保留分支"一行、vision 选型依据整块、
+  Agent Preset 那段解释、推荐绑定末尾的 provider 提示、§4 的状态表与字段清单、链后的两段说明、
+  整个「运行时」块、§5 的全部正文（只留一句指路）、"裸 /rolegroup"与 GUI 粘贴提示、§8 兼容性、§9 常见问题。
+- 章节重编号为 1–9（中英同步）。
+- 顺手把 doctor 示例里的旧绑定（`k3` / `qwen3.8-max`）改成当前的 `k3.1-pro` / `qwen3.8-flash`。
+
+### Fixed
+
+- `package.json` 的 `files` 原先没有 `MODELS.md`：README 链着它，但 npm 包里没有这个文件。已补
+  `MODELS.md` / `MODELS.en.md` / `CHANGELOG.md`。
+
+---
+
 ## [0.11.2] — 2026-11-13
 
 `MODELS.md` 收尾。两处因为 v0.11 变成假话的地方（"`rolegroup.jsonc` 会覆盖它"、"`init` 生成配置"），
