@@ -3178,7 +3178,11 @@ await okAsync('docs: MODELS 表 = 内置默认（单一事实源）+ 中英一�
   for (const [file, doc] of [['MODELS.md', zh], ['MODELS.en.md', en]]) {
     const leaked = [...doc.md.matchAll(/\]\(((?:docs|plans|evals|\.handoff|\.dsh)\/[^)]*)\)/g)].map((m) => m[1])
     assert.deepEqual(leaked, [], `${file} 不得链接未公开目录：${leaked.join(', ')}`)
-    assert.ok(doc.md.split('\n').length <= 30, `${file} 应保持在一屏内（当前 ${doc.md.split('\n').length} 行）`)
+    // 不锁行数（用户 2026-11-13：行数不是问题，废话才是）。改为锁「别写死内部实现」：
+    // 文档会公开，出现源码路径 / 内部术语就说明写错了对象。
+    for (const banned of ['lib/', 'src/client/', 'mergeRoles', 'fillBuiltinRows', 'projection.']) {
+      assert.equal(doc.md.includes(banned), false, `${file} 面向用户，不得出现内部实现细节「${banned}」`)
+    }
   }
   // AC-6：README 里的角色数/测试数必须跟着代码走
   const zhReadme = readFileSync(join(root, 'README.md'), 'utf8')
