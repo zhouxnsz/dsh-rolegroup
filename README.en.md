@@ -7,7 +7,7 @@ instance, so the tool name is the role name.
 The role/category binding is inspired by
 [oh-my-openagent](https://github.com/code-yeongyu/oh-my-openagent) ("omo"); see §9.
 
-> Version **0.11.3** ｜ dsh **≥ 0.2.1-rc.1** (verified on 0.2.1-rc.3) ｜ MIT
+> Version **0.11.4** ｜ dsh **≥ 0.2.1-rc.1** (verified on 0.2.1-rc.3) ｜ MIT
 
 ---
 
@@ -218,8 +218,8 @@ Layout:
 
 | Path | Contents |
 |---|---|
-| `lib/` | Host side: `index.js` (composition/recomposition), `roles.js` (role table and merge), `config.js` (settings `Config`), `config-info.js` (config snapshot + read-only route), `doctor.js`, `command.js` |
-| `src/client/` | Client sources (`controller.js` / `card.jsx` / `locales.js` / `meta.js` / `config-file.js`); `lib/client.js` is the esbuild artifact and must be rebuilt after edits |
+| `lib/` | Host side: `index.js` (composition/recomposition), `roles.js` (role table and merge), `config.js` (settings `Config`), `settings-table.js` (override table ↔ section), `init.js` (`/rolegroup init` export), `doctor.js`, `command.js` |
+| `src/client/` | Client sources (`controller.js` / `card.jsx` / `locales.js` / `meta.js`); `lib/client.js` is the esbuild artifact and must be rebuilt after edits |
 | `tests/` | Offline smoke suite (plain Node, no browser) |
 | `scripts/` | `build-client.mjs` (esbuild bundle; injects the `package.json` version) and `link-deployment-deps.mjs` (environment symlink) |
 | `locale/` | Plugin metadata: `meta.title` and `meta.description` in `en.json` / `zh.json`, shown by the Plugins page and the Plugin Market |

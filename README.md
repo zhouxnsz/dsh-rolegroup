@@ -6,7 +6,7 @@ dsh 的角色化委派插件。先定义角色（名字、绑定模型、persona
 角色/类别绑定的思路参考了 [oh-my-openagent](https://github.com/code-yeongyu/oh-my-openagent)（omo），
 详见 §9。
 
-> 版本 **0.11.3** ｜ 要求 dsh **≥ 0.2.1-rc.1**（本机实测 0.2.1-rc.3）｜ MIT
+> 版本 **0.11.4** ｜ 要求 dsh **≥ 0.2.1-rc.1**（本机实测 0.2.1-rc.3）｜ MIT
 
 ---
 
@@ -200,8 +200,8 @@ npm run build:client  # 改了 src/client/** 或 lib/roles.js 后重建 lib/clie
 
 | 路径 | 内容 |
 |---|---|
-| `lib/` | 宿主侧：`index.js`（装配/重组装）、`roles.js`（角色表与合并）、`config.js`（settings `Config`）、`config-info.js`（「配置文件」快照 + 只读路由）、`doctor.js`、`command.js` |
-| `src/client/` | 客户端源码（`controller.js` / `card.jsx` / `locales.js` / `meta.js` / `config-file.js`）；`lib/client.js` 是 esbuild 产物，改完要重建 |
+| `lib/` | 宿主侧：`index.js`（装配/重组装）、`roles.js`（角色表与合并）、`config.js`（settings `Config`）、`settings-table.js`（覆盖表 ↔ section）、`init.js`（`/rolegroup init` 导出）、`doctor.js`、`command.js` |
+| `src/client/` | 客户端源码（`controller.js` / `card.jsx` / `locales.js` / `meta.js`）；`lib/client.js` 是 esbuild 产物，改完要重建 |
 | `tests/` | 离线 smoke suite（Node 直跑，不需要浏览器） |
 | `scripts/` | `build-client.mjs`（esbuild 打包，注入 `package.json` 的版本号）、`link-deployment-deps.mjs`（环境软链） |
 | `locale/` | 插件元数据：`en.json` / `zh.json` 里的 `meta.title` 与 `meta.description`，供插件页与插件市场显示本地化名称和说明 |

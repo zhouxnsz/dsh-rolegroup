@@ -169,8 +169,8 @@ export class RolegroupCardController {
 
   /**
    * 当前生效行（未被草稿覆盖时的基准）。
-   * 面板已接管（或面板层已存了行）时用 settings 层的 roles；否则用 host 快照预填的
-   * jsonc / 内置生效表。这样未接管时页面默认就有内容，而不是一张空表。
+   * 面板已接管（或面板层已存了行）时用 settings 层的 roles；否则用内置表
+   * （客户端已打包 DEFAULT_ROLES，不请求宿主）。
    */
   effectiveRows() {
     const snapshot = this.scope.getSnapshot()
@@ -365,7 +365,7 @@ export class RolegroupCardController {
     this.failed = false
     this.conflicted = false
     this.publish()
-    // 两个 op 一次提交：enabled=true 让 host 知道「面板已接管」（缺省 false = 未接管 → 回落 jsonc）；
+    // 两个 op 一次提交：enabled=true 让 host 知道「面板已接管」（缺省 false = 未接管 → 回落内置表）；
     // roles 是整表。顺序无关（两个独立路径）。
     await this.scope.mutate([
       { op: 'set', path: ['enabled'], value: true },
@@ -379,7 +379,6 @@ export class RolegroupCardController {
     this.publish()
   }
 
-  /** 重置为文件配置：清用户层的 enabled + roles → 真正退出接管，回落 jsonc 链。 */
   /**
    * 恢复官方推荐：**零覆盖**接管。
    *

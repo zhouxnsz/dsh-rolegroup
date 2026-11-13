@@ -44,8 +44,8 @@ export const zh = {
   layerSummary: '配置层级说明',
   // 这里是 UI 文案（React 按**纯文本**渲染，不解析 markdown）——强调只能用「」，
   // 写 **xxx** 会被原样显示成星号（2026-10-20 真机截图发现）。默认折叠，不占版面。
-  layerNote: '优先级：本面板 > 项目 rolegroup.jsonc > 用户 rolegroup.jsonc > 内置表。'
-    + '保存会把当前生效表整层写入面板并接管；「重置为文件配置」可退出接管。完整生效表见 /rolegroup doctor。',
+  layerNote: '两层：本面板的覆盖 > 内置表。面板没有覆盖时，生效的就是内置表；'
+    + '「恢复官方推荐」会清空所有覆盖。完整生效表见 /rolegroup doctor。',
 }
 
 export const en = {
@@ -88,9 +88,8 @@ export const en = {
   emptyNotTakeover: 'No editable roles; add one manually.',
   emptyTakeover: 'No overrides: every role uses the built-in table.',
   layerSummary: 'How the layers work',
-  layerNote: 'Precedence: this panel > project rolegroup.jsonc > user rolegroup.jsonc > built-in table. '
-    + 'Saving writes the active table into this panel and takes over the whole layer; Reset to file config '
-    + 'exits takeover. See /rolegroup doctor for the effective table.',
+  layerNote: 'Two layers: panel overrides > built-in table. With no override in the panel, the built-in table '
+    + 'applies; "Restore official defaults" clears every override. See /rolegroup doctor for the effective table.',
 }
 
 export default { zh, en }

@@ -2019,6 +2019,44 @@ await okAsync('volatile: 300ms 防抖 + sameSection 短路——同值连发 0 �
   }
 })
 
+await okAsync('compose 干净环境（无第三方凭据、模型列表为空）→ 8 角色全在册、6 个降级到 deepseek-account（v0.11.4/AC-1）', async () => {
+  // 真机实测（隔离 DSH_HOME + 无任何密钥）暴露过：链上「模型不在广告列表」比主路由严格，
+  // 导致整条链不可用、6 个角色被剪枝。这条把「8/8 + 6 degraded」从真机证据变成离线锁。
+  const tmp = await mkdtemp(join(tmpdir(), 'dsh-rg-clean-'))
+  const prevHome = process.env.DSH_HOME
+  process.env.DSH_HOME = tmp
+  __setTestOverrides({ debounceMs: 1, maxWaitMs: 5 })
+  try {
+    const fake = makeComposeCtx({
+      loader: makeContractLoader(),
+      llm: {
+        listProviders: () => [{ id: 'deepseek-account' }, { id: 'deepseek-official' }],
+        listModels: async () => [], // 无凭据：模型列表为空
+      },
+    })
+    await apply(fake.ctx, { debounceMs: 1, maxWaitMs: 5 })
+    const report = await waitForReport(reportPathOf(tmp), 8000)
+    assert.equal(report.registered.length, BUILTIN_COUNT, '干净环境也必须 8 个角色全在册')
+    assert.deepEqual(report.invalid, [], '不得再因为模型列表为空而剪枝角色')
+    const degraded = report.registered.filter((r) => r.degraded === true)
+    assert.equal(degraded.length, 6, `应有 6 个角色降级（qwen/kimi 系），实际 ${degraded.length}`)
+    for (const role of degraded) {
+      assert.equal(role.provider, 'deepseek-account', `${role.toolName} 应降级到账号 provider`)
+      assert.equal(role.model, 'deepseek-flash')
+      assert.ok(typeof role.primary === 'string' && role.primary.length > 0, `${role.toolName} 必须记下原主路由`)
+    }
+    assert.deepEqual(
+      report.registered.filter((r) => r.degraded !== true).map((r) => r.toolName).sort(),
+      ['fallback', 'scout'],
+      '主路由就是 deepseek-official 的两个角色不算降级',
+    )
+  } finally {
+    __setTestOverrides(undefined)
+    if (prevHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = prevHome
+  }
+})
+
 await okAsync('compose recompose 的角色校验：新表中未注册 provider 的角色被 dispose 且进报告 invalid[]（v0.4/AC-12）', async () => {
   const tmp = await mkdtemp(join(tmpdir(), 'dsh-rg-t2-invalid-'))
   const prevHome = process.env.DSH_HOME
@@ -2054,6 +2092,10 @@ await okAsync('compose recompose 的角色校验：新表中未注册 provider �
     assert.equal(report.invalid.length, 1, JSON.stringify(report.invalid))
     assert.equal(report.invalid[0].toolName, 'scribe')
     assert.ok(report.invalid[0].reason.includes('ghost-provider'), report.invalid[0].reason)
+    // 剪枝原因不得再让用户去改 rolegroup.jsonc（v0.11 起它不生效），必须指向面板
+    assert.equal(report.invalid[0].reason.includes('rolegroup.jsonc'), false,
+      `剪枝原因不得再指向已废弃的配置文件：${report.invalid[0].reason}`)
+    assert.ok(report.invalid[0].reason.includes('设置'), '剪枝原因必须指向设置面板')
     assert.equal(report.registered.length, BUILTIN_COUNT - 1, 'scribe 被剪枝后剩 内置角色数 - 1 在册')
     assert.ok(!report.registered.some((r) => r.toolName === 'scribe'))
     // 记账正确性：内置角色数条旧 fiber + scribe 在重组装中新建又判 invalid 的 1 条 = N+1 次 dispose
@@ -2351,9 +2393,17 @@ ok('roles: resolveRoleRoute —— 主路由可用不降级 / provider 缺失沿
   assert.equal(out.primary, 'qwen-token-plan-cn/qwen3.8-max', '必须保留原路由供报告标注')
   assert.deepEqual([out.role.provider, out.role.model], ['deepseek-official', 'deepseek-flash'])
   assert.equal(out.tried.length, 2, '第一个备用档模型未广告 → 进 tried，继续试下一个')
+  // v0.11.4：provider 已注册但广告列表为空（凭据缺失 / 列表拉取失败）时，链与主路由同等宽容——
+  // 记下第一个「provider 在册、模型未广告」的候选，降级过去，而不是把角色剪枝。
   out = resolveRoleRoute(role, { providers: ['deepseek-official'], modelsOf: () => [] })
+  assert.equal(out.ok, true, '干净环境（provider 在册、无模型列表）不得整条链不可用')
+  assert.equal(out.degraded, true)
+  assert.equal(out.warning, 'model-unadvertised')
+  assert.deepEqual([out.role.provider, out.role.model], ['deepseek-official', 'deepseek-v4-pro'])
+  // 所有 provider 都未注册 → 仍然 fail-loud，不许假装成功
+  out = resolveRoleRoute(role, { providers: [], modelsOf: () => [] })
   assert.equal(out.ok, false)
-  assert.deepEqual(out.tried.map((t) => t.reason), ['provider', 'model', 'model'])
+  assert.deepEqual(out.tried.map((t) => t.reason), ['provider', 'provider', 'provider'])
   out = resolveRoleRoute({ toolName: 'x', provider: 'p', model: 'm' }, { providers: ['p'], modelsOf: () => ['other'] })
   assert.equal(out.ok, true)
   assert.equal(out.warning, 'model-unadvertised')
@@ -2913,6 +2963,15 @@ await okAsync('controller: restoreOfficial = 零覆盖接管（只写 enabled=tr
 
 
 
+
+await okAsync('client-card: 「恢复官方推荐」只在自定义态渲染（官方态不显示灰按钮）（v0.11.4/AC-6）', async () => {
+  const card = readFileSync(fileURLToPath(new URL('../src/client/card.jsx', import.meta.url)), 'utf8')
+  // 与「补齐」按钮同一条规则：没活干就不渲染，而不是灰着让人问"为什么点不了"
+  assert.ok(/state\.mode === 'custom' \? \([\s\S]*?restoreOfficial[\s\S]*?\) : null/.test(card),
+    '恢复官方推荐必须只在 mode==="custom" 时渲染')
+  assert.equal(/disabled=\{disabled \|\| state\.mode === 'official'\}/.test(card), false,
+    '不得再用「官方态禁用」的灰按钮形式')
+})
 
 ok('controller: projection.mode 两态（official / custom）+ overrides 计数（v0.11/AC-3）', () => {
   const section = SECTION_ALL()
@@ -3500,7 +3559,7 @@ await okAsync('client-bundle: 真实产物的头部渲染出「角色配置 v<�
       t: (key) => zh[key],
       view: 'page',
       useRolegroupCard: (selector) => selector(projection),
-      editRole() {}, addRole() {}, removeRole() {}, save() {}, discard() {}, restoreOfficial() {}, exitToFile() {}, retryCatalog() {},
+      editRole() {}, addRole() {}, removeRole() {}, save() {}, discard() {}, restoreOfficial() {}, retryCatalog() {},
       openConfig: cardActions.openConfig, closeConfig: cardActions.closeConfig, refreshConfig: cardActions.refreshConfig,
     })
     const nodes = []

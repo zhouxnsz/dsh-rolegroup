@@ -339,10 +339,13 @@ export function RolegroupCard(props) {
           {t('discard')}
         </button>
         {/* Official defaults = zero-override takeover: no model names are written, so future
-            built-in default changes are followed automatically. */}
-        <button type="button" disabled={disabled || state.mode === 'official'} onClick={props.restoreOfficial}>
-          {t('restoreOfficial')}
-        </button>
+            built-in default changes are followed automatically. Hidden when already official —
+            a greyed button with nothing to do reads as broken (same rule as the fill button). */}
+        {state.mode === 'custom' ? (
+          <button type="button" disabled={disabled} onClick={props.restoreOfficial}>
+            {t('restoreOfficial')}
+          </button>
+        ) : null}
       </div>
       <p className="dsh-rg-liveHint">{t('liveHint')}</p>
       </div>
