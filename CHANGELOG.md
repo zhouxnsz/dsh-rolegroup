@@ -8,6 +8,32 @@
 
 ---
 
+## [0.11.5] — 2026-11-13
+
+dsh 升到 **0.2.2-rc.3**（跨了 `0.2.1-rc.3` → `0.2.2-rc.1` 四个升级目录）。按升级文档逐条核对，只命中
+两个 subagent 相关变更，都不影响本插件；真机实测也通过。
+
+### Changed
+
+- README 中英的"本机实测"版本改为 0.2.2-rc.3（`engines.dsh` 保持 `>=0.2.1-rc.1`）。
+- AGENTS 补充一条坑：dsh 升级后 `link:deps` 若报「已存在且不是软链」，说明本地留着一份旧版 schemastery
+  真实副本（这次是 3.18.5 vs 部署树 3.19.0），两边不一致会让 settings 表单行为异常。删掉重跑即可。
+
+### 验证（0.2.2-rc.3 真机）
+
+- 启动报告 8/8 注册，`failed` / `invalid` / `problems` 全空；
+- 委派链路实测：`scout` 子会话 header `agentPreset=rolegroup-scout`、depth 1，正常调用 `glob` + `read`
+  并返回正确结果，`turn/end: completed`；
+- `npm test` 138 passed（含 engines 覆盖断言）。
+
+### 核对过的升级项（均不适用）
+
+`subagent-names`（改的是调用参数与 `list_agents` 行格式，我们不消费）、`subagent-explicit-reasoning`
+（要求调用时 provider/model 同时给出；我们把两者写在实例 Config 里，且 `modelSelectionSettings: false`）、
+`model-listing-refresh`（我们没有自建列表缓存）、`context-menu` / `css-anchored-menus`（不使用菜单）。
+
+---
+
 ## [0.11.4] — 2026-11-13
 
 发布前的干净环境实测：在隔离 DSH_HOME、没有任何 qwen/kimi 凭据的机器上装 0.11.3，**8 个角色只注册了

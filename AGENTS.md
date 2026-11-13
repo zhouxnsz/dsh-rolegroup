@@ -168,6 +168,15 @@ npm run build:client  # 重建 lib/client.js
 **无法裸导入 `@deepseek-ai/*`**；而 settings 范式要求条目**静态导出** schemastery `Config`，不能延迟解析。
 故把部署树的 schemastery 软链进本仓库 `node_modules`（软链**不入库**，`pretest` 会自动重建）。
 
+**dsh 升级后要检查这个软链**：如果 `npm run link:deps` 的输出是「已存在且不是软链（可能是真实安装的
+副本），不覆盖」，说明本地留着一份旧版本的真实副本（`npm install` 装的 peer）。2026-11-13 dsh 升到
+0.2.2-rc.3 时，本地副本是 3.18.5、部署树是 3.19.0，两边不一致会让 settings 表单行为异常。处理：
+
+```sh
+rm -rf node_modules/@deepseek-ai/schemastery
+npm run link:deps    # 应输出 schemastery@<部署版本> → <部署树路径>
+```
+
 ### 文档纪律
 
 给用户看的文档（README / MODELS / CHANGELOG）按这几条写：先具体后结论；每段至少一个可核事实（文件名、
