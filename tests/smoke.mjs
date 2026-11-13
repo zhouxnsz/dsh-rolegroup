@@ -3928,39 +3928,46 @@ await okAsync('client-index: 槽位注册参数与 v0.4 契约一致——5 元�
   assert.equal(srcMod.inject.includes('settingsScope'), false)
 })
 
-await okAsync('docs: MODELS.md 与内置默认表一致 + README 链接它 + 不含私有目录（models-doc/AC-1..4）', async () => {
+await okAsync('docs: MODELS 两表与内置默认表一致 + README 各链各版（models-doc/AC-1..4）', async () => {
   const root = fileURLToPath(new URL('..', import.meta.url))
-  const md = readFileSync(join(root, 'MODELS.md'), 'utf8')
-  // AC-1：角色集合必须与 DEFAULT_ROLES 完全一致（新增角色忘了写文档 → 红）
-  const rows = [...md.matchAll(/^\| `([a-z][a-z0-9_]*)` \| `([^`]+)` \| `([^`]+)` \|/gm)]
-    .map((m) => ({ toolName: m[1], recommended: m[2], builtin: m[3] }))
-  assert.ok(rows.length >= 8, `MODELS.md 推荐表解析出的行数异常：${rows.length}`)
-  const docNames = rows.map((r) => r.toolName).sort()
+  const parse = (file) => {
+    const md = readFileSync(join(root, file), 'utf8')
+    const rows = [...md.matchAll(/^\| `([a-z][a-z0-9_]*)` \| `([^`]+)` \| `([^`]+)` \|/gm)]
+      .map((m) => ({ toolName: m[1], recommended: m[2], builtin: m[3] }))
+    return { md, rows }
+  }
+  const zh = parse('MODELS.md')
+  const en = parse('MODELS.en.md')
   const codeNames = Object.keys(DEFAULT_ROLES).sort()
-  assert.deepEqual(docNames, codeNames, 'MODELS.md 的角色集合必须与 DEFAULT_ROLES 一致')
-  // AC-2：「内置默认」列必须逐字等于 DEFAULT_ROLES 的 provider/model（防两处漂移）
-  for (const row of rows) {
-    const def = DEFAULT_ROLES[row.toolName]
-    assert.equal(row.builtin, `${def.provider}/${def.model}`,
-      `MODELS.md 中 ${row.toolName} 的「内置默认」与 lib/roles.js 不一致（文档 ${row.builtin} vs 代码 ${def.provider}/${def.model}）`)
+  for (const [file, doc] of [['MODELS.md', zh], ['MODELS.en.md', en]]) {
+    // AC-1：角色集合必须与 DEFAULT_ROLES 完全一致（新增角色忘了写文档 → 红）
+    assert.deepEqual(doc.rows.map((r) => r.toolName).sort(), codeNames, `${file} 的角色集合必须与 DEFAULT_ROLES 一致`)
+    // AC-2：「内置默认」列必须逐字等于 DEFAULT_ROLES 的 provider/model（防两处漂移）
+    for (const row of doc.rows) {
+      const def = DEFAULT_ROLES[row.toolName]
+      assert.equal(row.builtin, `${def.provider}/${def.model}`,
+        `${file} 中 ${row.toolName} 的「内置默认」与 lib/roles.js 不一致（文档 ${row.builtin} vs 代码 ${def.provider}/${def.model}）`)
+    }
   }
-  // AC-3：README 中英都必须链接 MODELS.md（否则两处各说各话）
-  for (const file of ['README.md', 'README.en.md']) {
-    const text = readFileSync(join(root, file), 'utf8')
-    assert.ok(text.includes('MODELS.md'), `${file} 必须链接 MODELS.md`)
+  // AC-2b：两版推荐值必须一致（中英各一份，内容不能各写各的）
+  assert.deepEqual(
+    zh.rows.map((r) => [r.toolName, r.recommended]).sort(),
+    en.rows.map((r) => [r.toolName, r.recommended]).sort(),
+    'MODELS.md 与 MODELS.en.md 的推荐值必须一致',
+  )
+  // AC-3：中文 README 链中文表，英文 README 链英文表
+  assert.ok(readFileSync(join(root, 'README.md'), 'utf8').includes('MODELS.md'), 'README.md 必须链接 MODELS.md')
+  assert.ok(readFileSync(join(root, 'README.en.md'), 'utf8').includes('MODELS.en.md'), 'README.en.md 必须链接 MODELS.en.md')
+  // AC-4：文档自身不得链接私有目录
+  for (const [file, doc] of [['MODELS.md', zh], ['MODELS.en.md', en]]) {
+    const leaked = [...doc.md.matchAll(/\]\(((?:docs|plans|evals|\.handoff|\.dsh)\/[^)]*)\)/g)].map((m) => m[1])
+    assert.deepEqual(leaked, [], `${file} 不得链接未公开目录：${leaked.join(', ')}`)
   }
-  // AC-4：不得链接私有目录（公开面纪律；MODELS.md 是根级公开文档）
-  const leaked = [...md.matchAll(/\]\(((?:docs|plans|evals|\.handoff|\.dsh)\/[^)]*)\)/g)].map((m) => m[1])
-  assert.deepEqual(leaked, [], `MODELS.md 不得链接未公开目录：${leaked.join(', ')}`)
-  // 自检：文档确实声明了「暂不推荐」的 v4-pro（用户 2026-11-13 决定）
-  assert.ok(md.includes('deepseek-v4-pro') && md.includes('暂不推荐'), 'MODELS.md 必须记录 v4-pro 暂不纳入推荐')
-  // AC-5：写作规则必须存在且被 AGENTS 引用（否则下次又写回"塑料味"）
-  assert.ok(existsSync(join(root, 'STYLE.md')), 'STYLE.md 必须存在')
-  const style = readFileSync(join(root, 'STYLE.md'), 'utf8')
-  assert.ok(style.includes('禁用'), 'STYLE.md 必须包含禁用词清单')
-  assert.ok(style.includes('自检'), 'STYLE.md 必须包含交稿自检')
-  assert.ok(readFileSync(join(root, 'AGENTS.md'), 'utf8').includes('STYLE.md'), 'AGENTS.md 必须引用 STYLE.md')
-  // AC-6：文档里的角色数/测试数必须跟着代码走（v0.8.3 实测：README 一直写着 7 个角色、156 项测试）
+  // 文档必须极简：这两个文件只是查表用，不该再长出评测流水（用户 2026-11-13 明确要求）
+  for (const [file, doc] of [['MODELS.md', zh], ['MODELS.en.md', en]]) {
+    assert.ok(doc.md.split('\n').length <= 30, `${file} 应保持在一屏内（当前 ${doc.md.split('\n').length} 行）`)
+  }
+  // AC-6：README 里的角色数/测试数必须跟着代码走（v0.8.3 实测：README 一直写着 7 个角色、156 项测试）
   const zhReadme = readFileSync(join(root, 'README.md'), 'utf8')
   assert.ok(zhReadme.includes(`${BUILTIN_COUNT} 个在册角色`), `README 的 doctor 示例必须写 ${BUILTIN_COUNT} 个在册角色`)
   assert.ok(!/7 个(在册角色|「角色)/.test(zhReadme), 'README 不得残留「7 个角色」的旧数字')
@@ -3968,6 +3975,8 @@ await okAsync('docs: MODELS.md 与内置默认表一致 + README 链接它 + 不
   const enReadme = readFileSync(join(root, 'README.en.md'), 'utf8')
   assert.ok(!/156 cases/.test(enReadme), 'README.en.md 不得残留 156 cases')
   assert.ok(!/seven built-in roles|seven "角色/.test(enReadme), 'README.en.md 不得残留 seven 的旧数字')
+  // AC-7：写作风格笔记是本机文件，不得入库（用户 2026-11-13 决定）
+  assert.equal(existsSync(join(root, 'STYLE.md')), false, 'STYLE.md 不得出现在仓库里（应放 AGENTS.local.md）')
 })
 
 await okAsync('docs: README.md 与 README.en.md 章节编号 parity（双语防漂移）', async () => {

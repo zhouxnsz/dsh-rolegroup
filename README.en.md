@@ -7,7 +7,7 @@ instance, so the tool name is the role name.
 The role/category binding is inspired by
 [oh-my-openagent](https://github.com/code-yeongyu/oh-my-openagent) ("omo"); see §10.
 
-> Version **0.8.4** ｜ dsh **≥ 0.2.1-rc.1** (verified on 0.2.1-rc.3) ｜ MIT
+> Version **0.8.5** ｜ dsh **≥ 0.2.1-rc.1** (verified on 0.2.1-rc.3) ｜ MIT
 
 ---
 
@@ -147,20 +147,11 @@ main session.
 
 ### Recommended bindings (official suggestion)
 
-The model behind each role was picked by measurement. The full table, which models we tried, how we scored
-them, and when these conclusions expire all live in **[MODELS.md](./MODELS.md)**; only the essentials are here.
+See **[MODELS.en.md](./MODELS.en.md)** for the recommended model per role. "Recommended" and "built-in default"
+can differ — `reviewer` is one.
 
-`coder`, `planner`, `scout` and `scribe` came out flat: all five candidates scored full marks, including the tiers
-that cost ten times less. Do not pay for a flagship there. `vision` is the same story — every candidate read both
-test images correctly, Kimi K3 included.
-
-Only two things actually went wrong. `qwen3.7-plus` listed an issue as "blocking" in a review and then signed off
-as "conditionally approved", contradicting itself. Kimi failed twice to write the requested file in the fallback
-tasks and answered in JSON instead.
-
-The built-in defaults point at the author's own subscriptions, which you probably do not have. On a new machine run
-`/rolegroup init` — it generates a config from the providers your machine actually registered — and use
-`/rolegroup doctor` to compare before editing rows.
+The provider must be registered on your machine. Without the matching subscription, built-in roles degrade along
+their fallback chain to `deepseek-official`; on a new machine run `/rolegroup init` first.
 
 ## 4. Configuration
 
@@ -437,7 +428,7 @@ vision look at `/tmp/ui.png` and check spacing and contrast", and it calls `read
 The image has to be a file on disk, because delegation carries text only. It ships bound to `qwen3.8-flash`,
 which scored 5/5 on OCR and 6/6 on UI fields in the 2026-11-13 round; `deepseek-flash`, `qwen3.8-max` and
 `kimi-k3` also scored full marks, so switching models buys accuracy you cannot measure. Pick on cost and
-availability — see [MODELS.md](./MODELS.md).
+availability — see [MODELS.en.md](./MODELS.en.md).
 
 If you do switch: avoid text-only models, and keep them out of the fallback chain (`v4-pro`, for example), or the
 degraded route cannot read the image at all. There is no "vision capability" flag upstream, so the plugin cannot
