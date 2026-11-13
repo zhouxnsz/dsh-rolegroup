@@ -10,11 +10,6 @@
 
 import { DEFAULT_ROLES, TOOL_NAME_RE } from '../../lib/roles.js'
 
-/**
- * 「当前配置」只读接口：host 侧 lib/config-info.js 注册同一路径
- * （smoke suite 有断言锁两端一致）。客户端只读，不写任何东西。
- */
-
 /** 可经 editRole 文本编辑的字段（toolName 走专门的重命名路径）。v0.5：readonly 已移除。 */
 const TEXT_FIELDS = ['provider', 'model', 'reasoningEffort', 'persona', 'summary']
 
