@@ -6,7 +6,7 @@ dsh 的角色化委派插件。先定义角色（名字、绑定模型、persona
 角色/类别绑定的思路参考了 [oh-my-openagent](https://github.com/code-yeongyu/oh-my-openagent)（omo），
 详见 §10。
 
-> 版本 **0.8.0** ｜ 要求 dsh **≥ 0.2.1-rc.1**（本机实测 0.2.1-rc.3）｜ MIT
+> 版本 **0.8.1** ｜ 要求 dsh **≥ 0.2.1-rc.1**（本机实测 0.2.1-rc.3）｜ MIT
 
 ---
 
@@ -132,6 +132,33 @@ dsh --profile web --dump-config | grep -A1 dsh-rolegroup   # 应出现 - id: dsh
 每个角色由一个委派工具实例和一个自动生成的 Agent Preset 组成。Preset 复制你默认会话模式的组合，
 换掉 persona，再去掉委派组。所以「设置 → Agent 预设」里会看到 8 个「角色：xxx · 模型」。这些 preset 是自动
 生成的，不要删除或改名，也不要把主会话选成它们。
+
+### 推荐绑定（官方建议）
+
+> 依据：两轮实测——2026-11-09（7 角色 × 3 任务 × 5 候选 = **105 格**）与 2026-11-13
+> （`vision` 专项 4 模型 × 2 图像任务 = **8 格**）。「能力优先」需要你的订阅里有 `opencode-go`；
+> 「通用」就是内置默认值。没有对应订阅时，内置角色会沿备用链降级到 `deepseek-official`。
+
+| 角色 | 能力优先 | 通用（内置默认） | 依据 |
+|---|---|---|---|
+| `analyst` | `opencode-go/deepseek-v4-pro` | `qwen-token-plan-cn/qwen3.8-max` | 105 格中**唯一**覆盖「配置可能含密钥/凭据」风险的模型 |
+| `planner` | `kimi-coding/k3` | `kimi-coding/k3` | 三份计划四段齐全；无区分度 |
+| `coder` | `kimi-coding/k3` | `kimi-coding/k3` | 15/15 隐藏测试全过；无区分度 |
+| `reviewer` | `opencode-go/deepseek-v4-pro` | `qwen-token-plan-cn/qwen3.8-max` | 三份补丁缺陷全中 |
+| `scout` | `deepseek-official/deepseek-flash` | 同左 | 三仓库定位全对；唯一保证注册的 provider |
+| `scribe` | `deepseek-official/deepseek-flash` | `qwen-token-plan-cn/qwen3.8-flash` | 三文体全对；无区分度 |
+| `vision` | `qwen-token-plan-cn/qwen3.8-flash` | 同左 | 8 格全对（OCR 5/5、UI 6/6）；**旗舰无增益** |
+| `fallback` | `deepseek-official/deepseek-flash` | 同左 | 知识全对 + 交付合规 |
+
+三条实测结论，比表格更省事：
+
+- **`coder` / `planner` / `scout` / `scribe` 已到能力天花板**（换更难任务才有区分度）→ **按成本选**，别为它们上旗舰；
+- **`vision` 不需要旗舰**：qwen3.8-flash / deepseek-flash / qwen3.8-max / kimi-k3 在干净图上全部满分；
+- **两个要避开的坑**：`qwen3.7-plus` 在 reviewer 上出现过「把问题列为阻塞却给『有条件通过』」的自相矛盾；
+  **Kimi 系**在 fallback 上连续两轮**不写指定产物文件**（只回 JSON）——需要落盘产物的角色慎用。
+
+> ⚠️ provider 可用性取决于你的订阅：内置默认指向作者自己的订阅。换机器时先跑 `/rolegroup init`
+> 生成一套本机可用的路由，或用上面的「通用」档对照 `/rolegroup doctor` 自己改。
 
 ## 4. 配置
 
