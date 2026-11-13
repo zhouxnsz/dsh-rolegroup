@@ -2933,6 +2933,18 @@ ok('controller: 自定义角色追加在内置之后；未接管时不做补全�
   assert.equal(plain.inject().hooks.rolegroupCard.getSnapshot().rows.length, BUILTIN_COUNT)
 })
 
+ok('client-card: 模型不可用时不得断言「不支持推理档位」（v0.11.6/AC-7）', async () => {
+  const card = readFileSync(fileURLToPath(new URL('../src/client/card.jsx', import.meta.url)), 'utf8')
+  const { zh, en } = await import(new URL('../src/client/locales.js', import.meta.url))
+  // 目录里没有该模型（available:false）≠ 该模型不支持推理；两者必须用不同词条
+  assert.ok(/modelInfo\.available === false \? t\('modelUnavailable'\) : t\('reasoningEffortUnsupported'\)/.test(card),
+    '可用性未知时必须用「模型不可用」，只有目录明确声明无档位时才说「不支持」')
+  for (const [name, dict] of [['zh', zh], ['en', en]]) {
+    assert.ok(dict.modelUnavailable && dict.reasoningEffortUnsupported, `${name} 两个词条都必须存在`)
+    assert.notEqual(dict.modelUnavailable, dict.reasoningEffortUnsupported, `${name} 两个词条不得复用于同一含义`)
+  }
+})
+
 await okAsync('client-card: 不再有特殊「继承区」——所有角色都渲染成行；文案词典同步移除（v0.8/AC-3）', async () => {
   const card = readFileSync(fileURLToPath(new URL('../src/client/card.jsx', import.meta.url)), 'utf8')
   assert.equal(card.includes('state.inherited'), false, 'card 不得再有继承区的特殊分支')

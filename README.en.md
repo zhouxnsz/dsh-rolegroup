@@ -7,7 +7,7 @@ instance, so the tool name is the role name.
 The role/category binding is inspired by
 [oh-my-openagent](https://github.com/code-yeongyu/oh-my-openagent) ("omo"); see §9.
 
-> Version **0.11.5** ｜ dsh **≥ 0.2.1-rc.1** (verified on 0.2.2-rc.3) ｜ MIT
+> Version **0.11.6** ｜ dsh **≥ 0.2.1-rc.1** (verified on 0.2.2-rc.3) ｜ MIT
 
 ---
 

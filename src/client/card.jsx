@@ -245,7 +245,13 @@ export function RolegroupCard(props) {
                 : null}
             </select>
           ) : catalogReady && modelInfo !== undefined ? (
-            <input value={row.reasoningEffort} disabled placeholder={t('reasoningEffortUnsupported')} />
+            // available === false means the model is missing from the catalog (missing credentials or
+            // an unregistered provider); its effort levels are unknown, so do not claim "unsupported".
+            <input
+              value={row.reasoningEffort}
+              disabled
+              placeholder={modelInfo.available === false ? t('modelUnavailable') : t('reasoningEffortUnsupported')}
+            />
           ) : (
             <input
               value={row.reasoningEffort}
