@@ -2110,16 +2110,6 @@ await okAsync('compose recompose 的角色校验：新表中未注册 provider �
   }
 })
 
-// --- 2026-10-15：层语义（整层择一）的**可见性**锁定 + configMtimeMs 来源归因 ---
-// 背景（实测复现，两条都是"文档/诊断与实现错位"）：
-//   ① README §4 原写"未列出的角色照旧沿用下层"，读者会以为面板接管后 jsonc 覆盖仍在生效；
-//      实现是**整层择一**（接管 ⇒ jsonc 整层让位 ⇒ 未列出的角色回落内置表）。行为不改（既有断言
-//      已锁 v0.1 语义），改的是**把后果说出来**：日志必须点名被让位的文件与回落目标。
-//   ② 快照的 configMtimeMs 原先恒取 jsonc 文件 mtime，接管时也一样 → doctor 的「配置年龄提示」
-//      会把一个已被让位的文件的年龄算到 settings 面板头上。现按「生效来源就是该文件」把关。
-
-
-
 // --- v0.6 T4：契约自检（dsh ≥0.2.1）——缺 agentPresets 服务必须 fail-loud 但不抛 ---
 await okAsync('v0.6 契约自检：无 agentPresets 服务 → warn + 角色全 failed + 报告仍写出（v0.6/A12/A17）', async () => {
   const tmp = await mkdtemp(join(tmpdir(), 'dsh-rg-v6-contract-'))

@@ -6,7 +6,7 @@ dsh 的角色化委派插件。先定义角色（名字、绑定模型、persona
 角色/类别绑定的思路参考了 [oh-my-openagent](https://github.com/code-yeongyu/oh-my-openagent)（omo），
 详见 §9。
 
-> 版本 **0.11.6** ｜ 要求 dsh **≥ 0.2.1-rc.1**（本机实测 0.2.2-rc.3）｜ MIT
+> 版本 **0.11.7** ｜ 要求 dsh **≥ 0.2.1-rc.1**（本机实测 0.2.2-rc.3）｜ MIT
 
 ---
 
@@ -208,7 +208,7 @@ npm run build:client  # 改了 src/client/** 或 lib/roles.js 后重建 lib/clie
 
 ## 8. 参考与致谢
 
-角色（类别）到模型的绑定方式、JSONC 配置格式，以及角色子代理不能再委派这条约束，参考了
+角色（类别）到模型的绑定方式与 persona 约定，以及角色子代理不能再委派这条约束，参考了
 [oh-my-openagent](https://github.com/code-yeongyu/oh-my-openagent)（omo）。模型搭配没有照搬 omo 的
 结论；本插件的绑定按自己的配置和评测决定。
 

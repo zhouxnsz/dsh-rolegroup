@@ -7,7 +7,7 @@ instance, so the tool name is the role name.
 The role/category binding is inspired by
 [oh-my-openagent](https://github.com/code-yeongyu/oh-my-openagent) ("omo"); see §9.
 
-> Version **0.11.6** ｜ dsh **≥ 0.2.1-rc.1** (verified on 0.2.2-rc.3) ｜ MIT
+> Version **0.11.7** ｜ dsh **≥ 0.2.1-rc.1** (verified on 0.2.2-rc.3) ｜ MIT
 
 ---
 
@@ -226,7 +226,7 @@ Layout:
 
 ## 8. Credits
 
-The role (category) to model binding, the JSONC config format, and the rule that role subagents cannot
+The role (category) to model binding, the persona convention, and the rule that role subagents cannot
 delegate again are inspired by [oh-my-openagent](https://github.com/code-yeongyu/oh-my-openagent) ("omo"). The
 model pairings are not copied from omo; this plugin's bindings are decided by its own configuration and
 evaluation.

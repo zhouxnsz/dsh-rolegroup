@@ -18,7 +18,7 @@ dsh 的**角色化委派插件**：角色 = 名字 + 绑定模型 + persona；�
 | `lib/roles.js` | 内置角色表、配置合并（`mergeRoles`）、实例配置构建（`buildInstanceConfig`）、迁移提示文案 |
 | `lib/presets.js` | 角色 Agent Preset 的纯函数构建：克隆默认 preset rows（JsExpr 按引用）/ 替换 persona / 剔除 delegation |
 | `lib/config.js` | settings 条目 `Config`（schemastery）——命名空间的对外契约 |
-| `lib/settings-table.js` | section ↔ 文件配置的双向映射、跨字段校验 |
+| `lib/settings-table.js` | section ↔ 面板覆盖表的双向映射、跨字段校验 |
 | `lib/doctor.js` | 纯逻辑：快照读取/归一化、`auditRoles`、`renderDoctorText` |
 | `lib/command.js` | `/rolegroup` 命令面（doctor / init） |
 | `lib/init.js` | `/rolegroup init`：把当前生效绑定导出成 JSONC 文本（只打印，不落盘） |
@@ -139,7 +139,7 @@ graph/team 运行时）。它有值得学的点（**能力矩阵进系统提示*
 - **`init` 只是导出器**：打印当前生效绑定的 JSONC 快照，不写文件、不接受 `--write/--project/--diff/--force`
   （这些标志现在会被当作未知子命令）。
 - **provider 未注册的角色会被剪枝**（不注册、只记进 `invalid[]`）——但这条只对**显式配置**的角色成立：
-  内置角色带备用链，会先降级到 `deepseek-official` 再谈剪枝（见上两条）。兜底角色尤其要留意：
+  内置角色带备用链，会先沿链降级到 `deepseek-account` / `deepseek-official` 再谈剪枝（见上两条）。兜底角色尤其要留意：
   一条被剪枝的兜底路由等于不存在。
 
 ## settings 模型（0.1.7+；本插件 v0.4 迁入）

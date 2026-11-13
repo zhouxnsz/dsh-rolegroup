@@ -8,6 +8,19 @@
 
 ---
 
+## [0.11.7] — 2026-11-13
+
+发布前把文档过了一遍，清掉最后几处"旧世界"残留（都不影响行为）。
+
+### Changed
+
+- README 中英的致谢段不再提"JSONC 配置格式"（配置文件层已删）；
+- AGENTS 架构地图把 `settings-table.js` 的职责从"section ↔ 文件配置"改为"section ↔ 面板覆盖表"；
+- AGENTS 的剪枝说明改为"沿链降级到 `deepseek-account` / `deepseek-official`"（链首已是账号）；
+- 删掉测试文件里一段描述已删除测试的孤儿注释（还在讲"整层择一"）。
+
+---
+
 ## [0.11.6] — 2026-11-13
 
 第一次用 `dsh-browser-playwright-codex` 在真浏览器里点了一遍设置页（隔离 profile，不动用户配置）。
