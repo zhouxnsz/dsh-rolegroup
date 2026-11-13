@@ -7,7 +7,7 @@ instance, so the tool name is the role name.
 The role/category binding is inspired by
 [oh-my-openagent](https://github.com/code-yeongyu/oh-my-openagent) ("omo"); see §10.
 
-> Version **0.8.1** ｜ dsh **≥ 0.2.1-rc.1** (verified on 0.2.1-rc.3) ｜ MIT
+> Version **0.8.2** ｜ dsh **≥ 0.2.1-rc.1** (verified on 0.2.1-rc.3) ｜ MIT
 
 ---
 
@@ -147,34 +147,21 @@ main session.
 
 ### Recommended bindings (official suggestion)
 
-> Evidence: two measured rounds — 2026-11-09 (7 roles × 3 tasks × 5 candidates = **105 cells**) and
-> 2026-11-13 (`vision` focus: 4 models × 2 image tasks = **8 cells**). "Best" needs an `opencode-go`
-> subscription; "Default" is the built-in value. Without those subscriptions, built-in roles degrade along
-> their fallback chain to `deepseek-official` (the one provider dsh always registers).
+We pick each role's model from **measurements**, and we distinguish "official recommendation" from
+"built-in default" — they may differ. The full rationale (which models we tested, the method, the full matrix,
+known traps, limitations and re-test triggers) lives in **[MODELS.md](./MODELS.md)**.
 
-| Role | Best | Default (built-in) | Why |
-|---|---|---|---|
-| `analyst` | `opencode-go/deepseek-v4-pro` | `qwen-token-plan-cn/qwen3.8-max` | the only model that flagged "config may contain secrets" in all 105 cells |
-| `planner` | `kimi-coding/k3` | `kimi-coding/k3` | complete 4-section plans; no discrimination |
-| `coder` | `kimi-coding/k3` | `kimi-coding/k3` | 15/15 hidden tests; no discrimination |
-| `reviewer` | `opencode-go/deepseek-v4-pro` | `qwen-token-plan-cn/qwen3.8-max` | caught every planted defect |
-| `scout` | `deepseek-official/deepseek-flash` | same | all three locator tasks correct; always-registered provider |
-| `scribe` | `deepseek-official/deepseek-flash` | `qwen-token-plan-cn/qwen3.8-flash` | all three prose tasks correct; no discrimination |
-| `vision` | `qwen-token-plan-cn/qwen3.8-flash` | same | 8/8 cells (OCR 5/5, UI 6/6); **flagship adds nothing** |
-| `fallback` | `deepseek-official/deepseek-flash` | same | knowledge correct + delivery compliant |
+Three takeaways that matter more than a table:
 
-Three takeaways that matter more than the table:
-
-- **`coder` / `planner` / `scout` / `scribe` have hit the capability ceiling** with these tasks → **pick on cost**,
+- **`coder` / `planner` / `scout` / `scribe` have hit the capability ceiling** with these tasks → pick on cost,
   do not pay for a flagship;
-- **`vision` does not need a flagship**: qwen3.8-flash / deepseek-flash / qwen3.8-max / kimi-k3 all scored full
-  marks on clean images;
-- **two traps**: `qwen3.7-plus` produced a self-contradictory review verdict (blocking issue + "conditionally
-  approved"); **Kimi** failed twice to write the requested artifact file in the fallback tasks.
+- **`vision` does not need a flagship**: all four candidates (including Kimi K3) scored full marks on clean images;
+- **two traps**: `qwen3.7-plus` produced a self-contradictory review verdict; **Kimi** failed twice to write the
+  requested artifact in the fallback tasks.
 
 > ⚠️ Provider availability depends on your subscription: the built-in defaults point at the author's own
-> subscriptions. On a new machine run `/rolegroup init` to generate a working route table, or edit rows
-> against the "Default" column using `/rolegroup doctor`.
+> subscriptions. On a new machine run `/rolegroup init` to generate a working route table, or compare with
+> `/rolegroup doctor` before editing rows.
 
 ## 4. Configuration
 

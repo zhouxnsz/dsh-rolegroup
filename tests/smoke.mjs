@@ -3928,6 +3928,34 @@ await okAsync('client-index: 槽位注册参数与 v0.4 契约一致——5 元�
   assert.equal(srcMod.inject.includes('settingsScope'), false)
 })
 
+await okAsync('docs: MODELS.md 与内置默认表一致 + README 链接它 + 不含私有目录（models-doc/AC-1..4）', async () => {
+  const root = fileURLToPath(new URL('..', import.meta.url))
+  const md = readFileSync(join(root, 'MODELS.md'), 'utf8')
+  // AC-1：角色集合必须与 DEFAULT_ROLES 完全一致（新增角色忘了写文档 → 红）
+  const rows = [...md.matchAll(/^\| `([a-z][a-z0-9_]*)` \| `([^`]+)` \| `([^`]+)` \|/gm)]
+    .map((m) => ({ toolName: m[1], recommended: m[2], builtin: m[3] }))
+  assert.ok(rows.length >= 8, `MODELS.md 推荐表解析出的行数异常：${rows.length}`)
+  const docNames = rows.map((r) => r.toolName).sort()
+  const codeNames = Object.keys(DEFAULT_ROLES).sort()
+  assert.deepEqual(docNames, codeNames, 'MODELS.md 的角色集合必须与 DEFAULT_ROLES 一致')
+  // AC-2：「内置默认」列必须逐字等于 DEFAULT_ROLES 的 provider/model（防两处漂移）
+  for (const row of rows) {
+    const def = DEFAULT_ROLES[row.toolName]
+    assert.equal(row.builtin, `${def.provider}/${def.model}`,
+      `MODELS.md 中 ${row.toolName} 的「内置默认」与 lib/roles.js 不一致（文档 ${row.builtin} vs 代码 ${def.provider}/${def.model}）`)
+  }
+  // AC-3：README 中英都必须链接 MODELS.md（否则两处各说各话）
+  for (const file of ['README.md', 'README.en.md']) {
+    const text = readFileSync(join(root, file), 'utf8')
+    assert.ok(text.includes('MODELS.md'), `${file} 必须链接 MODELS.md`)
+  }
+  // AC-4：不得链接私有目录（公开面纪律；MODELS.md 是根级公开文档）
+  const leaked = [...md.matchAll(/\]\(((?:docs|plans|evals|\.handoff|\.dsh)\/[^)]*)\)/g)].map((m) => m[1])
+  assert.deepEqual(leaked, [], `MODELS.md 不得链接未公开目录：${leaked.join(', ')}`)
+  // 自检：文档确实声明了「暂不推荐」的 v4-pro（用户 2026-11-13 决定）
+  assert.ok(md.includes('deepseek-v4-pro') && md.includes('暂不推荐'), 'MODELS.md 必须记录 v4-pro 暂不纳入推荐')
+})
+
 await okAsync('docs: README.md 与 README.en.md 章节编号 parity（双语防漂移）', async () => {
   // 双语 README 最大的风险是"只改一份"。用**语言无关的章节编号**做锚：
   // 两份必须节数相同、编号逐项相同、且每节都有实质正文（防占位空节漂移）。

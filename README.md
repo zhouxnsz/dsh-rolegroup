@@ -6,7 +6,7 @@ dsh 的角色化委派插件。先定义角色（名字、绑定模型、persona
 角色/类别绑定的思路参考了 [oh-my-openagent](https://github.com/code-yeongyu/oh-my-openagent)（omo），
 详见 §10。
 
-> 版本 **0.8.1** ｜ 要求 dsh **≥ 0.2.1-rc.1**（本机实测 0.2.1-rc.3）｜ MIT
+> 版本 **0.8.2** ｜ 要求 dsh **≥ 0.2.1-rc.1**（本机实测 0.2.1-rc.3）｜ MIT
 
 ---
 
@@ -135,30 +135,17 @@ dsh --profile web --dump-config | grep -A1 dsh-rolegroup   # 应出现 - id: dsh
 
 ### 推荐绑定（官方建议）
 
-> 依据：两轮实测——2026-11-09（7 角色 × 3 任务 × 5 候选 = **105 格**）与 2026-11-13
-> （`vision` 专项 4 模型 × 2 图像任务 = **8 格**）。「能力优先」需要你的订阅里有 `opencode-go`；
-> 「通用」就是内置默认值。没有对应订阅时，内置角色会沿备用链降级到 `deepseek-official`。
+我们按**实测**给每个角色定了推荐模型，并区分「官方推荐」与「内置默认」——两者可能不同。
+完整说明（测过哪些模型、方法、全量矩阵、已知坑、局限与重测条件）见 **[MODELS.md](./MODELS.md)**。
 
-| 角色 | 能力优先 | 通用（内置默认） | 依据 |
-|---|---|---|---|
-| `analyst` | `opencode-go/deepseek-v4-pro` | `qwen-token-plan-cn/qwen3.8-max` | 105 格中**唯一**覆盖「配置可能含密钥/凭据」风险的模型 |
-| `planner` | `kimi-coding/k3` | `kimi-coding/k3` | 三份计划四段齐全；无区分度 |
-| `coder` | `kimi-coding/k3` | `kimi-coding/k3` | 15/15 隐藏测试全过；无区分度 |
-| `reviewer` | `opencode-go/deepseek-v4-pro` | `qwen-token-plan-cn/qwen3.8-max` | 三份补丁缺陷全中 |
-| `scout` | `deepseek-official/deepseek-flash` | 同左 | 三仓库定位全对；唯一保证注册的 provider |
-| `scribe` | `deepseek-official/deepseek-flash` | `qwen-token-plan-cn/qwen3.8-flash` | 三文体全对；无区分度 |
-| `vision` | `qwen-token-plan-cn/qwen3.8-flash` | 同左 | 8 格全对（OCR 5/5、UI 6/6）；**旗舰无增益** |
-| `fallback` | `deepseek-official/deepseek-flash` | 同左 | 知识全对 + 交付合规 |
+三条比表格更有用的结论：
 
-三条实测结论，比表格更省事：
+- **`coder` / `planner` / `scout` / `scribe` 已到能力天花板** → 按成本选，别为它们上旗舰；
+- **`vision` 不需要旗舰**：四个候选（含 Kimi K3）在干净图上全部满分；
+- **两个坑**：`qwen3.7-plus` 在 reviewer 上结论自相矛盾；**Kimi 系**在 fallback 上连续两轮不写指定产物。
 
-- **`coder` / `planner` / `scout` / `scribe` 已到能力天花板**（换更难任务才有区分度）→ **按成本选**，别为它们上旗舰；
-- **`vision` 不需要旗舰**：qwen3.8-flash / deepseek-flash / qwen3.8-max / kimi-k3 在干净图上全部满分；
-- **两个要避开的坑**：`qwen3.7-plus` 在 reviewer 上出现过「把问题列为阻塞却给『有条件通过』」的自相矛盾；
-  **Kimi 系**在 fallback 上连续两轮**不写指定产物文件**（只回 JSON）——需要落盘产物的角色慎用。
-
-> ⚠️ provider 可用性取决于你的订阅：内置默认指向作者自己的订阅。换机器时先跑 `/rolegroup init`
-> 生成一套本机可用的路由，或用上面的「通用」档对照 `/rolegroup doctor` 自己改。
+> ⚠️ provider 可用性取决于你的订阅：内置默认指向作者自己的订阅。换机器先跑 `/rolegroup init`
+> 生成一套本机可用的路由，或用 `/rolegroup doctor` 对照后再改。
 
 ## 4. 配置
 
