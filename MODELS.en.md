@@ -2,17 +2,17 @@
 
 This page lists the officially recommended model for each role.
 
-| Role | Recommended | Built-in default |
-|---|---|---|
-| `analyst` | `qwen-token-plan-cn/qwen3.8-max` | `qwen-token-plan-cn/qwen3.8-max` |
-| `planner` | `kimi-coding/k3` | `kimi-coding/k3` |
-| `coder` | `kimi-coding/k3` | `kimi-coding/k3` |
-| `reviewer` | `qwen-token-plan-cn/qwen3.8-flash` | `qwen-token-plan-cn/qwen3.8-max` |
-| `scout` | `deepseek-official/deepseek-flash` | `deepseek-official/deepseek-flash` |
-| `scribe` | `qwen-token-plan-cn/qwen3.8-flash` | `qwen-token-plan-cn/qwen3.8-flash` |
-| `vision` | `qwen-token-plan-cn/qwen3.8-flash` | `qwen-token-plan-cn/qwen3.8-flash` |
-| `fallback` | `deepseek-official/deepseek-flash` | `deepseek-official/deepseek-flash` |
+| Role | Recommended model |
+|---|---|
+| `analyst` | `qwen3.8-max` |
+| `planner` | `k3.1-pro` |
+| `coder` | `k3.1-pro` |
+| `reviewer` | `qwen3.8-flash` |
+| `scout` | `deepseek-flash` |
+| `scribe` | `qwen3.8-flash` |
+| `vision` | `qwen3.8-flash` |
+| `fallback` | `deepseek-flash` |
 
-The provider must be registered on your machine — `/rolegroup doctor` shows that. Without the matching
-subscription, built-in roles degrade along their fallback chain to `deepseek-official`. On a new machine,
-`/rolegroup init` generates a route table that works locally.
+The same model usually has several routes (subscription plan, pay-as-you-go, gateway), so the provider is up to your
+configuration. Run `/rolegroup doctor` to see the routes this machine actually uses; on a new machine,
+`/rolegroup init` generates a working set.

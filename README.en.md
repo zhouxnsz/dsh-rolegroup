@@ -7,7 +7,7 @@ instance, so the tool name is the role name.
 The role/category binding is inspired by
 [oh-my-openagent](https://github.com/code-yeongyu/oh-my-openagent) ("omo"); see §10.
 
-> Version **0.8.5** ｜ dsh **≥ 0.2.1-rc.1** (verified on 0.2.1-rc.3) ｜ MIT
+> Version **0.9.0** ｜ dsh **≥ 0.2.1-rc.1** (verified on 0.2.1-rc.3) ｜ MIT
 
 ---
 
@@ -120,9 +120,9 @@ them in the panel. Model ids and the effective routes are whatever `/rolegroup d
 | Role | Built-in model | Responsibility |
 |---|---|---|
 | `analyst` | Qwen3.8 Max | Requirement clarification, path classification, plan review (do it / how), architecture decisions |
-| `planner` | Kimi K3 | Plan design: file layout, task breakdown, interface contracts, writing `plans.md` |
-| `coder` | Kimi K3 | Implementation: TDD red-green-refactor following `plans.md` steps |
-| `reviewer` | Qwen3.8 Max | Closing review: check acceptance criteria against evidence (was it actually done) |
+| `planner` | Kimi K3.1 Pro | Plan design: file layout, task breakdown, interface contracts, writing `plans.md` |
+| `coder` | Kimi K3.1 Pro | Implementation: TDD red-green-refactor following `plans.md` steps |
+| `reviewer` | Qwen3.8 Flash | Closing review: check acceptance criteria against evidence (was it actually done) |
 | `scout` | DeepSeek V4.1 Flash | Exploration and bulk search (returns `file:line` evidence) |
 | `scribe` | Qwen3.8 Flash | Documentation backfill, reports, spec maintenance |
 | `vision` | Qwen3.8 Flash | Vision: image analysis, UI review, prototype reading, OCR (**the bound model must accept images**) |

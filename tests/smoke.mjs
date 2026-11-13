@@ -201,7 +201,7 @@ ok('buildInstanceConfig: reasoningEffort 透传 + allowedAgentPresets 单元素�
   const { roles } = mergeRoles({ roles: { coder: { reasoningEffort: 'high' } } })
   const coder = roles.find((r) => r.toolName === 'coder')
   const config = buildInstanceConfig(coder, 'rolegroup-coder')
-  assert.deepEqual(config.agentOptions, { provider: 'kimi-coding', model: 'k3', reasoningEffort: 'high' })
+  assert.deepEqual(config.agentOptions, { provider: 'kimi-coding', model: 'k3.1-pro', reasoningEffort: 'high' })
   assert.deepEqual(config.agentPreset, 'rolegroup-coder')
   assert.deepEqual(config.allowedAgentPresets, ['rolegroup-coder'])
 })
@@ -1078,7 +1078,7 @@ ok('doctor: auditRoles 内置角色缺席快照 → missingDefaults 提示级 �
   const providers = ['qwen-token-plan-cn', 'kimi-coding', 'deepseek-official', 'example-provider']
   const modelsByProvider = {
     'qwen-token-plan-cn': ['qwen3.8-max', 'qwen3.8-flash'],
-    'kimi-coding': ['k3'],
+    'kimi-coding': ['k3', 'k3.1-pro'],
     'deepseek-official': ['deepseek-flash'],
     "example-provider": ['example-model'],
   }
@@ -1986,7 +1986,7 @@ await okAsync('compose D4 接管判据 + configSource 三态：未接管→jsonc
     const untouchedReport = await waitForReport(reportPathOf(homeA))
     assert.ok(untouchedReport.configSource.includes('rolegroup.jsonc'), untouchedReport.configSource)
 
-    // ② enabled=true + 显式空表 → 面板已接管 → 忽略 jsonc，回落**内置表**（coder.model === k3）
+    // ② enabled=true + 显式空表 → 面板已接管 → 忽略 jsonc，回落**内置表**（coder.model === DEFAULT_ROLES.coder.model）
     //    注意：不是「零角色」——mergeRoles 恒以内置表为底（v0.1 既有语义），空表 = 无覆盖。
     const homeB = await makeHome()
     process.env.DSH_HOME = homeB
@@ -1994,7 +1994,8 @@ await okAsync('compose D4 接管判据 + configSource 三态：未接管→jsonc
     __setTestOverrides({ debounceMs: 1, maxWaitMs: 5 })
     await apply(takeover.ctx, makeEntryConfig([], true).config)
     const takeoverCoder = takeover.calls.plugin.find((c) => c.toolName === 'coder')
-    assert.equal(takeoverCoder.agentOptions.model, 'k3', '接管后空表 = 无覆盖 → 内置表（不得回落 jsonc）')
+    assert.equal(takeoverCoder.agentOptions.model, DEFAULT_ROLES.coder.model,
+      '接管后空表 = 无覆盖 → 内置表（不得回落 jsonc）')
     const takeoverReport = await waitForReport(reportPathOf(homeB))
     assert.ok(takeoverReport.configSource.includes('settings'), takeoverReport.configSource)
 
@@ -2255,7 +2256,7 @@ await okAsync('层语义可见性：接管时日志须点名被让位的 jsonc �
       { toolName: 'scout', provider: 'deepseek-official', model: 'deepseek-flash' },
     ], true).config)
     // ① 行为判据：jsonc 的 coder 覆盖**不生效**（整层让位 → 回落内置 k3）
-    assert.equal(fake.calls.plugin.find((c) => c.toolName === 'coder').agentOptions.model, 'k3',
+    assert.equal(fake.calls.plugin.find((c) => c.toolName === 'coder').agentOptions.model, DEFAULT_ROLES.coder.model,
       '接管后 jsonc 整层让位：未列进面板的 coder 必须回落内置表')
     // ② 可见性判据：日志必须说全后果（只说"被覆盖"会让用户以为 jsonc 覆盖还在生效）
     const line = fake.logs.info.find((m) => m.includes('整层让位'))
@@ -3717,6 +3718,7 @@ await okAsync('controller: 推理档位按模型目录校验——非法值标�
         name: 'Kimi Coding',
         models: [
           { id: 'k3', name: 'K3', reasoning: { efforts: [{ id: 'low', name: 'Low' }, { id: 'high', name: 'High' }, { id: 'max', name: 'Max' }], defaultEffort: 'high' } },
+          { id: 'k3.1-pro', name: 'K3.1 Pro', reasoning: { efforts: [{ id: 'low', name: 'Low' }, { id: 'high', name: 'High' }, { id: 'max', name: 'Max' }], defaultEffort: 'high' } },
           { id: 'k3-256k', name: 'K3-256K', reasoning: { efforts: [{ id: 'high', name: 'High' }] } },
           { id: 'kimi-for-coding', name: 'Kimi For Coding' },
         ],
@@ -3928,54 +3930,47 @@ await okAsync('client-index: 槽位注册参数与 v0.4 契约一致——5 元�
   assert.equal(srcMod.inject.includes('settingsScope'), false)
 })
 
-await okAsync('docs: MODELS 两表与内置默认表一致 + README 各链各版（models-doc/AC-1..4）', async () => {
+await okAsync('docs: MODELS 表 = 内置默认（单一事实源）+ 中英一致 + README 各链各版（models-doc/AC-1..4）', async () => {
   const root = fileURLToPath(new URL('..', import.meta.url))
   const parse = (file) => {
     const md = readFileSync(join(root, file), 'utf8')
-    const rows = [...md.matchAll(/^\| `([a-z][a-z0-9_]*)` \| `([^`]+)` \| `([^`]+)` \|/gm)]
-      .map((m) => ({ toolName: m[1], recommended: m[2], builtin: m[3] }))
+    const rows = [...md.matchAll(/^\| `([a-z][a-z0-9_]*)` \| `([^`]+)` \|/gm)]
+      .map((m) => ({ toolName: m[1], model: m[2] }))
     return { md, rows }
   }
   const zh = parse('MODELS.md')
   const en = parse('MODELS.en.md')
-  const codeNames = Object.keys(DEFAULT_ROLES).sort()
   for (const [file, doc] of [['MODELS.md', zh], ['MODELS.en.md', en]]) {
     // AC-1：角色集合必须与 DEFAULT_ROLES 完全一致（新增角色忘了写文档 → 红）
-    assert.deepEqual(doc.rows.map((r) => r.toolName).sort(), codeNames, `${file} 的角色集合必须与 DEFAULT_ROLES 一致`)
-    // AC-2：「内置默认」列必须逐字等于 DEFAULT_ROLES 的 provider/model（防两处漂移）
+    assert.deepEqual(doc.rows.map((r) => r.toolName).sort(), Object.keys(DEFAULT_ROLES).sort(),
+      `${file} 的角色集合必须与 DEFAULT_ROLES 一致`)
+    // AC-2：推荐模型必须逐字等于代码里的内置默认（用户 2026-11-13 决定：两者不该是两个值）
     for (const row of doc.rows) {
-      const def = DEFAULT_ROLES[row.toolName]
-      assert.equal(row.builtin, `${def.provider}/${def.model}`,
-        `${file} 中 ${row.toolName} 的「内置默认」与 lib/roles.js 不一致（文档 ${row.builtin} vs 代码 ${def.provider}/${def.model}）`)
+      assert.equal(row.model, DEFAULT_ROLES[row.toolName].model,
+        `${file} 中 ${row.toolName} 的推荐模型与 lib/roles.js 不一致（文档 ${row.model} vs 代码 ${DEFAULT_ROLES[row.toolName].model}）`)
+      assert.equal(row.model.includes('/'), false, `${file} 不得写 provider（如 kimi-coding/k3）：用户的使用方式不同，provider 由配置决定`)
     }
   }
-  // AC-2b：两版推荐值必须一致（中英各一份，内容不能各写各的）
-  assert.deepEqual(
-    zh.rows.map((r) => [r.toolName, r.recommended]).sort(),
-    en.rows.map((r) => [r.toolName, r.recommended]).sort(),
-    'MODELS.md 与 MODELS.en.md 的推荐值必须一致',
-  )
+  // AC-2b：两版必须一致
+  assert.deepEqual(zh.rows.map((r) => [r.toolName, r.model]).sort(), en.rows.map((r) => [r.toolName, r.model]).sort(),
+    'MODELS.md 与 MODELS.en.md 的推荐值必须一致')
   // AC-3：中文 README 链中文表，英文 README 链英文表
   assert.ok(readFileSync(join(root, 'README.md'), 'utf8').includes('MODELS.md'), 'README.md 必须链接 MODELS.md')
   assert.ok(readFileSync(join(root, 'README.en.md'), 'utf8').includes('MODELS.en.md'), 'README.en.md 必须链接 MODELS.en.md')
-  // AC-4：文档自身不得链接私有目录
+  // AC-4：文档自身不得链接私有目录，且保持一屏内
   for (const [file, doc] of [['MODELS.md', zh], ['MODELS.en.md', en]]) {
     const leaked = [...doc.md.matchAll(/\]\(((?:docs|plans|evals|\.handoff|\.dsh)\/[^)]*)\)/g)].map((m) => m[1])
     assert.deepEqual(leaked, [], `${file} 不得链接未公开目录：${leaked.join(', ')}`)
-  }
-  // 文档必须极简：这两个文件只是查表用，不该再长出评测流水（用户 2026-11-13 明确要求）
-  for (const [file, doc] of [['MODELS.md', zh], ['MODELS.en.md', en]]) {
     assert.ok(doc.md.split('\n').length <= 30, `${file} 应保持在一屏内（当前 ${doc.md.split('\n').length} 行）`)
   }
-  // AC-6：README 里的角色数/测试数必须跟着代码走（v0.8.3 实测：README 一直写着 7 个角色、156 项测试）
+  // AC-6：README 里的角色数/测试数必须跟着代码走
   const zhReadme = readFileSync(join(root, 'README.md'), 'utf8')
   assert.ok(zhReadme.includes(`${BUILTIN_COUNT} 个在册角色`), `README 的 doctor 示例必须写 ${BUILTIN_COUNT} 个在册角色`)
   assert.ok(!/7 个(在册角色|「角色)/.test(zhReadme), 'README 不得残留「7 个角色」的旧数字')
   assert.ok(!zhReadme.includes('156 项'), 'README 不得残留 156 项测试的旧数字')
   const enReadme = readFileSync(join(root, 'README.en.md'), 'utf8')
   assert.ok(!/156 cases/.test(enReadme), 'README.en.md 不得残留 156 cases')
-  assert.ok(!/seven built-in roles|seven "角色/.test(enReadme), 'README.en.md 不得残留 seven 的旧数字')
-  // AC-7：写作风格笔记是本机文件，不得入库（用户 2026-11-13 决定）
+  // AC-7：写作风格笔记是本机文件，不得入库
   assert.equal(existsSync(join(root, 'STYLE.md')), false, 'STYLE.md 不得出现在仓库里（应放 AGENTS.local.md）')
 })
 

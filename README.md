@@ -6,7 +6,7 @@ dsh 的角色化委派插件。先定义角色（名字、绑定模型、persona
 角色/类别绑定的思路参考了 [oh-my-openagent](https://github.com/code-yeongyu/oh-my-openagent)（omo），
 详见 §10。
 
-> 版本 **0.8.5** ｜ 要求 dsh **≥ 0.2.1-rc.1**（本机实测 0.2.1-rc.3）｜ MIT
+> 版本 **0.9.0** ｜ 要求 dsh **≥ 0.2.1-rc.1**（本机实测 0.2.1-rc.3）｜ MIT
 
 ---
 
@@ -111,9 +111,9 @@ dsh --profile web --dump-config | grep -A1 dsh-rolegroup   # 应出现 - id: dsh
 | 角色 | 内置绑定模型 | 职责 |
 |---|---|---|
 | `analyst` | Qwen3.8 Max | 需求澄清、路径分类、方案评审（做不做/怎么做）、架构决策 |
-| `planner` | Kimi K3 | 计划设计：文件结构、任务拆分、接口契约、`plans.md` 落笔 |
-| `coder` | Kimi K3 | 编码执行：按 `plans.md` 步骤 TDD 红-绿-重构 |
-| `reviewer` | Qwen3.8 Max | 收口审查：逐项核对验收标准与证据（做没做到） |
+| `planner` | Kimi K3.1 Pro | 计划设计：文件结构、任务拆分、接口契约、`plans.md` 落笔 |
+| `coder` | Kimi K3.1 Pro | 编码执行：按 `plans.md` 步骤 TDD 红-绿-重构 |
+| `reviewer` | Qwen3.8 Flash | 收口审查：逐项核对验收标准与证据（做没做到） |
 | `scout` | DeepSeek V4.1 Flash | 探索定位、批量搜索（返回 `文件:行号` 证据） |
 | `scribe` | Qwen3.8 Flash | 文档回填、报告、spec 维护 |
 | `vision` | Qwen3.8 Flash | 看图：图片分析、UI 评审、原型识别、OCR（**要求绑定模型支持图片输入**） |
