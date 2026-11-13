@@ -6,7 +6,7 @@ dsh 的角色化委派插件。先定义角色（名字、绑定模型、persona
 角色/类别绑定的思路参考了 [oh-my-openagent](https://github.com/code-yeongyu/oh-my-openagent)（omo），
 详见 §10。
 
-> 版本 **0.8.3** ｜ 要求 dsh **≥ 0.2.1-rc.1**（本机实测 0.2.1-rc.3）｜ MIT
+> 版本 **0.8.4** ｜ 要求 dsh **≥ 0.2.1-rc.1**（本机实测 0.2.1-rc.3）｜ MIT
 
 ---
 
@@ -30,8 +30,8 @@ dsh 的角色化委派插件。先定义角色（名字、绑定模型、persona
 
 ### 边界：我们明确不做什么
 
-在 dsh 这种「一切插件化」的生态里，专注是一种选择，也是一条红线。以下是**刻意不做**的（每条都是
-设计决策，不是尚未实现）：
+下面这些是决定不做的，不是还没做。插件生态里上游一断档、两个插件抢同一个扩展点，摊子铺大了一次性
+全废，所以宁可窄一点。
 
 | 不做 | 为什么 |
 |---|---|
@@ -272,7 +272,7 @@ persona 表达。
 
 面板保存后，新会话会用到新配置，正在进行的会话不受影响。改 `rolegroup.jsonc` 仍然需要重启并开新会话。
 
-不能靠清空面板来停用插件。`mergeRoles` 永远以内置表打底，空覆盖表等于回到内置的 7 个角色。要停用，
+不能靠清空面板来停用插件。`mergeRoles` 永远以内置表打底，空覆盖表等于回到内置的 8 个角色。要停用，
 请卸载插件，或者摘掉安装项。
 
 ## 6. 诊断
@@ -310,7 +310,7 @@ doctor 会写明「主路由 X 不可用，已用内置备用档 Y」。
 ```
 
 ```
-dsh-rolegroup doctor — 7 个在册角色
+dsh-rolegroup doctor — 8 个在册角色
 快照时间 2026-10-25T12:00:00.000Z（0 天前）｜配置来源 (内置默认表)
 
 角色     绑定模型                         provider 模型
@@ -320,6 +320,7 @@ coder    kimi-coding/k3                   ✅       ✅
 reviewer qwen-token-plan-cn/qwen3.8-max   ✅       ✅
 scout    deepseek-official/deepseek-flash ✅       ✅
 scribe   qwen-token-plan-cn/qwen3.8-flash ✅       ✅
+vision   qwen-token-plan-cn/qwen3.8-flash ✅       ✅
 fallback deepseek-official/deepseek-flash ✅       ✅
 
 ✅ 无异常
@@ -334,7 +335,7 @@ fallback deepseek-official/deepseek-flash ✅       ✅
 ```sh
 npm run link:deps     # 首次 clone 后先跑：建 schemastery 软链
 npm install           # 再装 devDependency esbuild
-npm test              # 离线 smoke test，156 项；pretest 会自动跑 link:deps
+npm test              # 离线 smoke test，158 项；pretest 会自动跑 link:deps
 npm run build:client  # 改了 src/client/** 或 lib/roles.js 后重建 lib/client.js
 ```
 
@@ -369,7 +370,7 @@ npm run build:client  # 改了 src/client/** 或 lib/roles.js 后重建 lib/clie
 
 ## 9. 常见问题
 
-**「设置 → Agent 预设」里为什么多出 7 个「角色：xxx · 模型」？**
+**「设置 → Agent 预设」里为什么多出 8 个「角色：xxx · 模型」？**
 它们是本插件自动生成的（每个角色一个：复制默认模式的组合、替换 persona、去掉委派组）。不要删除或改名，
 也不要把主会话选成它们。删了对应角色会在下次启动或热更新时被审计为不可用；主会话选成角色 preset，会
 得到一个没有标准工具的会话。改角色配置请用面板或 `rolegroup.jsonc`。
@@ -379,26 +380,16 @@ DSH 的子代理页没有独立的模型 chip。本插件把模型写进两个�
 会显示 `角色：scout · deepseek-flash`）和委派 `description`（任务标题，如 `登录校验实现 · kimi-coding/k3`）。
 要像 Agent Teams 那样单独显示模型 chip，需要上游子代理 UI 支持。
 
-**想加一个「看图」角色？**
-插件支持自定义角色，加到 `rolegroup.jsonc`（或面板）即可：
+**看图任务怎么用？`vision` 够吗？**
+内置的 `vision` 就是干这个的，不用自己加角色。委派时把**图片路径**写进简报，例如
+「用 vision 看一下 `/tmp/ui.png`，检查间距和对比度」，它会自己调 `read_image`。
 
-```jsonc
-{
-  "roles": {
-    "looker": {
-      "provider": "opencode-go",
-      "model": "qwen3.7-plus",
-      "summary": "看图：截图、UI、图表、报错画面",
-      "persona": "你是 looker——视觉理解角色。用 read_image 打开给定路径的图片，返回结构化描述（布局、文字、颜色、异常）。只读；看不清就说看不清，不猜。",
-      "fallbackModels": ["deepseek-official/deepseek-flash"]
-    }
-  }
-}
-```
+图片必须是磁盘上的文件，委派本身只能传文字。它默认绑 `qwen3.8-flash`，2026-11-13 那轮评测里
+OCR 5/5、UI 字段 6/6，同批 `deepseek-flash`、`qwen3.8-max`、`kimi-k3` 也都是满分——所以换模型不会更准，
+按成本和可用性选就行。细节见 [MODELS.md](./MODELS.md)。
 
-注意三点：图片必须是**磁盘上的文件**（父模型把路径写进任务简报，子会话用 `read_image` 打开）；
-备用链里不要放纯文本模型（例如 `deepseek-v4-pro`），否则降级后看不了图；模型本身要支持图片输入
-（Qwen3.7 Plus / Qwen3.8 Flash / Kimi K3.1 Pro / DeepSeek V4.1 Flash 都可以）。
+要换的话，注意两点：别换成纯文本模型；备用链里也别放纯文本模型（例如 `v4-pro`），否则降级之后看不了图。
+上游没有「视觉能力位」，插件没法在启动期校验，换完先拿一张含明确文字的图试一下，能读出来就算可用。
 
 **我换了会话模式（PTC / 最小 / 创造），角色工具面为什么不变？**
 角色子会话的基底是你的默认模式，不跟随单会话选择的模式。只用标准模式时没有区别。

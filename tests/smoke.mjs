@@ -3960,6 +3960,14 @@ await okAsync('docs: MODELS.md 与内置默认表一致 + README 链接它 + 不
   assert.ok(style.includes('禁用'), 'STYLE.md 必须包含禁用词清单')
   assert.ok(style.includes('自检'), 'STYLE.md 必须包含交稿自检')
   assert.ok(readFileSync(join(root, 'AGENTS.md'), 'utf8').includes('STYLE.md'), 'AGENTS.md 必须引用 STYLE.md')
+  // AC-6：文档里的角色数/测试数必须跟着代码走（v0.8.3 实测：README 一直写着 7 个角色、156 项测试）
+  const zhReadme = readFileSync(join(root, 'README.md'), 'utf8')
+  assert.ok(zhReadme.includes(`${BUILTIN_COUNT} 个在册角色`), `README 的 doctor 示例必须写 ${BUILTIN_COUNT} 个在册角色`)
+  assert.ok(!/7 个(在册角色|「角色)/.test(zhReadme), 'README 不得残留「7 个角色」的旧数字')
+  assert.ok(!zhReadme.includes('156 项'), 'README 不得残留 156 项测试的旧数字')
+  const enReadme = readFileSync(join(root, 'README.en.md'), 'utf8')
+  assert.ok(!/156 cases/.test(enReadme), 'README.en.md 不得残留 156 cases')
+  assert.ok(!/seven built-in roles|seven "角色/.test(enReadme), 'README.en.md 不得残留 seven 的旧数字')
 })
 
 await okAsync('docs: README.md 与 README.en.md 章节编号 parity（双语防漂移）', async () => {
