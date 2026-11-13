@@ -30,6 +30,43 @@ function normalizeRow(row) {
     const value = row[field]
     if (typeof value === 'string' && value.trim() !== '') out[field] = value.trim()
   }
+  // 备用链：原样随行写回（面板保存 = 显式配置，丢链就再也降不了级）
+  if (Array.isArray(row.fallbackModels) && row.fallbackModels.length > 0) {
+    out.fallbackModels = [...row.fallbackModels]
+  }
+  return out
+}
+
+/** 接管态补全：按内置顺序返回整张表（覆盖行优先，缺的用内置默认值补，自定义行追加在后）。 */
+function fillBuiltinRows(panelRows) {
+  const remaining = new Map(panelRows.map((row) => [row.toolName, row]))
+  const out = []
+  for (const [toolName, role] of Object.entries(DEFAULT_ROLES)) {
+    const existing = remaining.get(toolName)
+    if (existing !== undefined) {
+      remaining.delete(toolName)
+      // 老数据补链：早期面板表里的内置角色行没有 `fallbackModels`（面板保存=显式配置→丢降级）。
+      // 面板层从来不提供链的编辑入口，所以「缺失」只可能是历史遗留，补回内置链是安全的；
+      // 若不补，这 7 行会一直是"显式无链"状态，主路由挂了就被剪枝。
+      const hasChain = Array.isArray(existing.fallbackModels) && existing.fallbackModels.length > 0
+      const builtinChain = Array.isArray(role.fallbackModels) ? role.fallbackModels : []
+      out.push(!hasChain && builtinChain.length > 0
+        ? { ...existing, fallbackModels: [...builtinChain] }
+        : existing)
+      continue
+    }
+    out.push({
+      toolName,
+      provider: role.provider,
+      model: role.model,
+      ...(Array.isArray(role.fallbackModels) && role.fallbackModels.length > 0
+        ? { fallbackModels: [...role.fallbackModels] }
+        : {}),
+      persona: role.persona,
+      summary: role.summary,
+    })
+  }
+  for (const extra of remaining.values()) out.push(extra)
   return out
 }
 
@@ -156,38 +193,15 @@ export class RolegroupCardController {
   effectiveRows() {
     const snapshot = this.scope.getSnapshot()
     const panelRows = Array.isArray(snapshot.value?.roles) ? snapshot.value.roles : []
-    if (snapshot.value?.enabled === true || panelRows.length > 0) return panelRows
+    // 接管态：面板必须显示**整张生效表**——未出现在覆盖表里的内置角色补成普通行（携带内置路由与
+    // 备用链）。否则新增内置角色对老用户彻底隐身（v0.8 vision 的真实反馈）。
+    if (snapshot.value?.enabled === true) return fillBuiltinRows(panelRows)
+    if (panelRows.length > 0) return panelRows
     return this.effective.status === 'ready' ? this.effective.roles : []
   }
 
   draftRows() {
     return [...(this.drafts?.values() ?? [])]
-  }
-
-  /**
-   * 接管态下「未覆盖的内置角色」——只读展示，**绝不写入覆盖表**。
-   *
-   * 为什么必须只读：`mergeRoles` 对"用户在配置里写了"的角色打 `strict`，一旦把某个内置角色
-   * materialize 进 `roles[]`，它的内置 `fallbackModels` 就不再生效 → 主路由不可用时会直接被剪枝。
-   *
-   * 数据源刻意是**客户端已有的 `DEFAULT_ROLES` 差集**，不走 host 快照：
-   * ① 零接口零 fetch；② 快照在 volatile 更新后会退化成覆盖表（host 侧另有修复），不可依赖。
-   * 未接管时 rows 已由 host 快照全量预填 → 返回空数组，避免重复展示。
-   * @returns {Array<{toolName: string, provider: string, model: string, summary: string}>}
-   */
-  inheritedRows() {
-    const snapshot = this.scope.getSnapshot()
-    if (snapshot.value?.enabled !== true) return []
-    const shown = this.drafts !== undefined ? this.draftRows() : this.effectiveRows()
-    const overridden = new Set(shown.map((row) => row.toolName))
-    return Object.entries(DEFAULT_ROLES)
-      .filter(([toolName]) => !overridden.has(toolName))
-      .map(([toolName, role]) => ({
-        toolName,
-        provider: role.provider,
-        model: role.model,
-        summary: typeof role.summary === 'string' ? role.summary : '',
-      }))
   }
 
   isDirty() {
@@ -563,6 +577,10 @@ export class RolegroupCardController {
       reasoningEffort: row.reasoningEffort ?? '',
       persona: row.persona ?? '',
       summary: row.summary ?? '',
+      // 备用链随行暴露（面板不编辑它，但保存必须原样带回，见 normalizeRow）
+      ...(Array.isArray(row.fallbackModels) && row.fallbackModels.length > 0
+        ? { fallbackModels: [...row.fallbackModels] }
+        : {}),
       isCustom: !Object.hasOwn(DEFAULT_ROLES, row.toolName),
       invalidFields: invalidFieldsOf(row, this.effortsOf(row.provider, row.model)),
     }))
@@ -577,8 +595,6 @@ export class RolegroupCardController {
       failed: this.failed,
       conflicted: this.conflicted,
       rows,
-      /** 未覆盖的内置角色（只读）：让「面板表比内置表少」这件事可见，而不是静默隐身。 */
-      inherited: this.inheritedRows(),
       catalog: { status: this.catalogStatus, groups: this.mergedGroups(rows), partial: this.catalogPartial },
       /** provider 未注册的行（catalog 就绪才计算）。 */
       routeGaps: this.routeGapsOf(this.drafts !== undefined ? this.draftRows() : rows),

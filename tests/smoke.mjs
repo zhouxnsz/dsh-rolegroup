@@ -1651,6 +1651,25 @@ ok('settings-table: validateSectionProblems 各类非法各出一条人话问题
   assert.ok(legacyRo[0].includes('readonly') && legacyRo[0].includes('permission preset'), legacyRo[0])
 })
 
+ok('settings-table: 面板行携带 fallbackModels → 保存后仍保留为显式链（v0.8/AC-4）', () => {
+  const section = rolesToSection(mergeRoles(undefined).roles)
+  for (const row of section.roles) {
+    assert.ok(Array.isArray(row.fallbackModels) && row.fallbackModels.length > 0,
+      `${row.toolName} 的 section 行必须携带链（否则面板一保存就丢降级）`)
+  }
+  const { roles, problems } = mergeRoles(sectionToFileConfig(section))
+  assert.deepEqual(problems, [])
+  for (const role of roles) {
+    assert.ok(Array.isArray(role.fallbackModels) && role.fallbackModels.length > 0,
+      `${role.toolName} 经面板投影后必须仍有链`)
+  }
+  // round-trip 稳定：再投影一次，链不变且 sameSection 相等
+  assert.equal(sameSection(rolesToSection(roles), section), true)
+  // 非法链必须报问题（不让坏数据静默进 host）
+  const bad = { roles: [{ toolName: 'x', provider: 'p', model: 'm', fallbackModels: ['not-a-ref'] }] }
+  assert.ok(validateSectionProblems(bad).some((m) => m.includes('fallbackModels')), JSON.stringify(validateSectionProblems(bad)))
+})
+
 ok('settings-table: sameSection 顺序无关——乱序同表 true、改一个 model false（v0.3/AC-8）', () => {
   const section = rolesToSection(mergeRoles(undefined).roles)
   assert.ok(sameSection(section, { roles: [...section.roles].reverse() }))
@@ -2185,7 +2204,13 @@ await okAsync('compose recompose 的角色校验：新表中未注册 provider �
     const startup = await waitForReport(reportPathOf(tmp))
     assert.deepEqual(startup.invalid, [], '启动终验不得剪枝（全部 provider 已注册）')
     const base = rolesToSection(builtinRoles)
-    const ghost = base.roles.map((r) => (r.toolName === 'scribe' ? { ...r, provider: 'ghost-provider' } : r))
+    // 显式配置**不带链**（模拟 jsonc/旧面板）→ 决策 1「显式配置不自动降级」→ 该角色应被剪枝。
+    // （携带链的情形由下一条 A-chain 用例覆盖：会降级而不是剪枝。）
+    const ghost = base.roles.map((r) => {
+      if (r.toolName !== 'scribe') return r
+      const { fallbackModels: _dropped, ...rest } = { ...r, provider: 'ghost-provider' }
+      return rest
+    })
     entry.setEnabled(true); entry.setRoles(ghost) // 面板保存一张把 scribe.provider 改成未注册值的表
     fake.fireVolatile()
     f.advance(300) // 防抖满 → recompose
@@ -3409,21 +3434,44 @@ await okAsync('controller: catalog 懒加载 + 合并——ready/partial、已�
   assert.ok(notices.length >= 1, '投影变化必须通知订阅者')
 })
 
-// --- v0.9：接管态下的「继承自内置」行（只读展示，绝不写入覆盖表）---
-ok('controller: 接管态下未覆盖的内置角色进入 projection.inherited，rows 仍只有覆盖行（v0.7/AC-1）', () => {
+// --- v0.8：接管态面板显示**整张生效表**（未列出的内置角色补成普通行，携带内置备用链）---
+ok('controller: 接管态 rows = 整张生效表（含未覆盖的内置角色，带内置路由与备用链）（v0.8/AC-1）', () => {
   const seven = SECTION_ALL().roles.filter((r) => r.toolName !== 'vision') // 模拟老用户：面板只写了 7 行
   const scope = makeFakeScope({ value: { roles: seven, enabled: true }, base: SECTION_ALL() })
   const snap = new RolegroupCardController(scope, IDLE_CTX()).inject().hooks.rolegroupCard.getSnapshot()
   assert.equal(snap.takeover, true)
-  assert.equal(snap.rows.length, seven.length, 'rows 必须仍只有覆盖行')
-  assert.deepEqual(snap.inherited.map((r) => r.toolName), ['vision'], '未覆盖的内置角色必须出现在 inherited')
-  assert.equal(snap.inherited[0].provider, 'qwen-token-plan-cn')
-  assert.equal(snap.inherited[0].model, 'qwen3.8-flash')
-  assert.ok(snap.inherited[0].summary.includes('图'), '必须带 summary 供只读展示')
-  assert.equal(snap.dirty, false, 'inherited 不得污染 dirty')
+  assert.equal(snap.rows.length, BUILTIN_COUNT, '接管态必须显示整张生效表（7 覆盖 + 1 内置补全）')
+  assert.deepEqual(snap.rows.map((r) => r.toolName), Object.keys(DEFAULT_ROLES), '顺序按内置表')
+  const vision = snap.rows.find((r) => r.toolName === 'vision')
+  assert.equal(vision.provider, 'qwen-token-plan-cn')
+  assert.equal(vision.model, 'qwen3.8-flash')
+  assert.deepEqual(vision.fallbackModels, ['deepseek-official/deepseek-flash'], '补全的行必须带上内置备用链')
+  assert.equal(vision.isCustom, false, 'vision 是内置角色，不是自定义行（因此没有删除按钮）')
+  assert.equal(snap.dirty, false, '补全不得把自己算成「有改动」')
 })
 
-ok('controller: 继承行永不写入覆盖表（save 载荷只含草稿行）（v0.7/AC-2）', async () => {
+ok('controller: 历史遗留的「显式无链」内置行会被补回内置链（v0.8/AC-5）', () => {
+  // 真实场景：0.7.0 之前面板保存的 7 行没有 fallbackModels（面板层当时不携带链）→ 一直是"显式无链"。
+  const legacy = SECTION_ALL().roles
+    .filter((r) => r.toolName !== 'vision')
+    .map((r) => { const { fallbackModels: _dropped, ...rest } = r; return rest })
+  assert.equal(legacy.some((r) => r.fallbackModels !== undefined), false, '前置：这批行确实没有链')
+  const snap = new RolegroupCardController(
+    makeFakeScope({ value: { roles: legacy, enabled: true }, base: SECTION_ALL() }), IDLE_CTX(),
+  ).inject().hooks.rolegroupCard.getSnapshot()
+  assert.equal(snap.rows.length, BUILTIN_COUNT)
+  for (const row of snap.rows) {
+    assert.ok(Array.isArray(row.fallbackModels) && row.fallbackModels.length > 0,
+      `${row.toolName} 必须补回内置链（否则主路由不可用即剪枝）`)
+  }
+  assert.deepEqual(snap.rows.find((r) => r.toolName === 'vision').fallbackModels,
+    ['deepseek-official/deepseek-flash'])
+  assert.deepEqual(snap.rows.find((r) => r.toolName === 'analyst').fallbackModels,
+    ['deepseek-official/deepseek-flash', 'deepseek-official/deepseek-v4-pro'])
+  assert.equal(snap.dirty, false, '补链不得把投影算成「有改动」')
+})
+
+ok('controller: 保存整表时**每行都带 fallbackModels**（显式配置不再丢链）（v0.8/AC-2）', async () => {
   const seven = SECTION_ALL().roles.filter((r) => r.toolName !== 'vision')
   const calls = []
   const scope = makeFakeScope({ value: { roles: seven, enabled: true }, base: SECTION_ALL() })
@@ -3432,41 +3480,44 @@ ok('controller: 继承行永不写入覆盖表（save 载荷只含草稿行）�
   const face = controller.inject()
   face.editRole('coder', 'model', 'k3-edited')
   await face.save()
-  assert.equal(calls.length, 1, '必须恰好一次 mutate')
-  const rolesOp = calls[0].ops.find((op) => op.path.join('.') === 'roles')
-  assert.equal(rolesOp.value.length, seven.length, '保存载荷必须与覆盖行数量一致')
-  assert.ok(!rolesOp.value.some((r) => r.toolName === 'vision'), '继承行绝不能被写进覆盖表（否则 vision 变 strict，丢内置备用链）')
+  assert.equal(calls.length, 1)
+  const roles = calls[0].ops.find((op) => op.path.join('.') === 'roles').value
+  assert.equal(roles.length, BUILTIN_COUNT, '整表保存')
+  for (const row of roles) {
+    assert.ok(Array.isArray(row.fallbackModels) && row.fallbackModels.length > 0,
+      `${row.toolName} 必须随行带回备用链（否则保存即丢降级）`)
+  }
+  assert.deepEqual(roles.find((r) => r.toolName === 'vision').fallbackModels,
+    ['deepseek-official/deepseek-flash'])
 })
 
-ok('controller: 改名的空位按层语义回落为 inherited，且不出现同名两行（v0.7/AC-3）', () => {
-  const seven = SECTION_ALL().roles.filter((r) => r.toolName !== 'vision')
-  const scope = makeFakeScope({ value: { roles: seven, enabled: true }, base: SECTION_ALL() })
-  const controller = new RolegroupCardController(scope, IDLE_CTX())
-  const face = controller.inject()
-  const snapOf = () => face.hooks.rolegroupCard.getSnapshot()
-  assert.deepEqual(snapOf().inherited.map((r) => r.toolName), ['vision'])
-  // 把 scribe 行改名为 vision：覆盖表里「scribe」空出来 → scribe 回落内置，vision 被覆盖
-  face.editRole('scribe', 'toolName', 'vision') // 卡片走 editRole(…,'toolName',…)，内部转 renameRole
-  assert.deepEqual(snapOf().inherited.map((r) => r.toolName), ['scribe'],
-    '空出来的名字按层语义回落内置（这是整层语义的正确结果，不做拦截）')
-  assert.equal(snapOf().rows.filter((r) => r.toolName === 'vision').length, 1, '覆盖表里不得出现同名两行')
-  assert.equal(snapOf().inherited.some((r) => r.toolName === 'vision'), false, '已覆盖的名字不得再列为继承')
-  face.editRole('vision', 'toolName', 'scribe')
-  assert.deepEqual(snapOf().inherited.map((r) => r.toolName), ['vision'], '改回去 → 继承关系复原')
-})
-
-ok('controller: 未接管 / 接管但空表时的 inherited 口径（v0.7/AC-1 边界）', () => {
-  // ① 未接管：rows 已由 host 快照全量预填 → inherited 必须为空（避免重复展示）
-  const base = SECTION_ALL()
-  const plain = new RolegroupCardController(makeFakeScope({ value: base, base }), IDLE_CTX())
-  assert.deepEqual(plain.inject().hooks.rolegroupCard.getSnapshot().inherited, [])
-  // ② 接管但覆盖表为空：rows=[]、inherited=全部内置角色
-  const empty = new RolegroupCardController(
-    makeFakeScope({ value: { roles: [], enabled: true }, base }), IDLE_CTX(),
+ok('controller: 自定义角色追加在内置之后；未接管时不做补全（v0.8/AC-1 边界）', () => {
+  const withCustom = [
+    ...SECTION_ALL().roles,
+    { toolName: 'my_role', provider: 'kimi-coding', model: 'k3', persona: 'p', summary: 's' },
+  ]
+  const taken = new RolegroupCardController(
+    makeFakeScope({ value: { roles: withCustom, enabled: true }, base: SECTION_ALL() }), IDLE_CTX(),
   )
-  const snap = empty.inject().hooks.rolegroupCard.getSnapshot()
-  assert.equal(snap.rows.length, 0)
-  assert.equal(snap.inherited.length, BUILTIN_COUNT)
+  const rows = taken.inject().hooks.rolegroupCard.getSnapshot().rows
+  assert.deepEqual(rows.map((r) => r.toolName), [...Object.keys(DEFAULT_ROLES), 'my_role'])
+  assert.equal(rows.at(-1).isCustom, true)
+
+  // 未接管：rows 来自 host 快照预填（本来就是整张表），不得再补一遍
+  const plain = new RolegroupCardController(makeFakeScope({ value: SECTION_ALL(), base: SECTION_ALL() }), IDLE_CTX())
+  assert.equal(plain.inject().hooks.rolegroupCard.getSnapshot().rows.length, BUILTIN_COUNT)
+})
+
+await okAsync('client-card: 不再有特殊「继承区」——所有角色都渲染成行；文案词典同步移除（v0.8/AC-3）', async () => {
+  const card = readFileSync(fileURLToPath(new URL('../src/client/card.jsx', import.meta.url)), 'utf8')
+  assert.equal(card.includes('state.inherited'), false, 'card 不得再有继承区的特殊分支')
+  assert.equal(/dsh-rg-inherited/.test(card), false, '继承区样式/节点必须删除')
+  const { zh, en } = await import(new URL('../src/client/locales.js', import.meta.url))
+  for (const [name, dict] of [['zh', zh], ['en', en]]) {
+    for (const key of ['inheritedNotice', 'inheritedShow', 'inheritedBadge']) {
+      assert.equal(Object.hasOwn(dict, key), false, `${name}.${key} 必须删除（不再有特殊处理）`)
+    }
+  }
 })
 
 await okAsync('controller: addRole/removeRole 增删草稿行；非法行（空 provider）投影 invalidFields 且 save 本地拦截（v0.3/AC-26）', async () => {
@@ -4063,30 +4114,14 @@ await okAsync('client-card: 已接管 → 状态行与空态都切到接管语�
   assert.ok(/state\.takeover \? ' dsh-rg-statusOn' : ''/.test(card), '状态点必须只在接管态点亮')
 })
 
-await okAsync('client-card: 接管态渲染只读继承清单（无输入/删除控件，全部走 t()）（v0.7/AC-4）', async () => {
+ok('client-card: 内置角色行不渲染删除按钮（与既有自定义行规则一致，无特殊处理）（v0.8/AC-3）', () => {
   const card = readFileSync(fileURLToPath(new URL('../src/client/card.jsx', import.meta.url)), 'utf8')
-  assert.ok(card.includes('state.inherited'), 'card.jsx 必须读 projection.inherited')
-  // 抽出继承区块，锁死「只读」：不得出现任何编辑/删除控件
-  const start = card.indexOf('{(state.inherited ?? []).length > 0 ? (')
-  assert.ok(start > 0, '必须存在继承区块')
-  const end = card.indexOf(') : null}', start)
-  assert.ok(end > start, '继承区块必须闭合')
-  const inheritedBlock = card.slice(start, end)
-  for (const forbidden of ['removeRole', 'editRole', 'addRole', '<input', '<select', '<textarea', 'routeGaps']) {
-    assert.equal(inheritedBlock.includes(forbidden), false, `继承区块不得含 ${forbidden}（只读展示，绝不写覆盖表）`)
-  }
-  assert.ok(inheritedBlock.includes("t('inheritedNotice')"), '提示行走词典')
-  assert.ok(inheritedBlock.includes("t('inheritedShow')"), '折叠标题走词典')
-  assert.ok(inheritedBlock.includes("t('inheritedBadge')"), '内置徽标走词典')
-  // 空态自相矛盾回归锁：接管 + 有继承行时不得再渲染 emptyTakeover
-  assert.ok(/state\.takeover && \(state\.inherited \?\? \[\]\)\.length > 0/.test(card),
-    '接管且存在继承行时必须抑制 emptyTakeover（否则同一屏既说"空"又列出角色）')
-  const { zh, en } = await import(new URL('../src/client/locales.js', import.meta.url))
-  for (const [name, dict] of [['zh', zh], ['en', en]]) {
-    for (const key of ['inheritedNotice', 'inheritedShow', 'inheritedBadge']) {
-      assert.ok(typeof dict[key] === 'string' && dict[key] !== '', `${name}.${key} 必须存在且非空`)
-    }
-  }
+  // 删除按钮只在 row.isCustom 时渲染：内置角色（含 vision）走同一分支，天然没有删除按钮。
+  assert.ok(/row\.isCustom \? \(/.test(card), '必须保留 isCustom 分流')
+  const removeGuard = card.indexOf('className="dsh-rg-remove"') // 跳过 CSS 里同名类
+  assert.ok(removeGuard > 0, '必须存在删除按钮节点')
+  const before = card.slice(Math.max(0, removeGuard - 600), removeGuard)
+  assert.ok(before.includes('row.isCustom ? ('), '删除按钮必须被 isCustom 守卫（内置行没有删除入口）')
 })
 
 ok('client-card: card.jsx 全文无硬编码 CJK——所有文案走 t()（v0.3/AC-28）', () => {

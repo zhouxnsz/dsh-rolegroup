@@ -124,9 +124,15 @@ graph/team 运行时）。它有值得学的点（**能力矩阵进系统提示*
   header 会继续显示原主路由。
 - **显式配置不自动降级**（决策 1）：`mergeRoles` 给每个角色打 `strict`（出现于用户配置即 true）；
   用户的角色若没写 `fallbackModels`，**不继承**内置链。内置链只服务「用户没写这个角色」的情形。
-- **面板层不携带模型链**（layer 1）：`rolesToSection` / `sectionToFileConfig` 白名单里没有
-  `fallbackModels`，面板保存会丢链；这是刻意的——面板=显式配置，链只在 jsonc 里声明。若将来给面板
-  加链编辑，必须同时改这三处映射并补 round-trip 断言。
+- **面板层必须携带模型链**（v0.8 起；此前刻意不带，导致面板保存=显式配置→**静默丢掉降级**）：
+  `rolesToSection` / `sectionToFileConfig` 的白名单与 `SECTION_FIELDS` 都含 `fallbackModels`，
+  客户端 `normalizeRow` / `projection.rows` 也原样透传；`validateSectionProblems` 用 `parseRouteRef`
+  校验格式。改这三处映射时**不要**再漏掉链，否则 round-trip 断言（`settings-table` 那条）会红。
+- **接管态面板 = 整张生效表**（v0.8）：`controller.effectiveRows()` 用 `fillBuiltinRows()` 把
+  「内置表有、覆盖表没有」的角色补成普通行（带路由 + 链 + persona/summary），自定义行追加在后；
+  **已存在但缺链的内置行也会补回内置链**（老面板表的历史遗留，见下一条），保存一次即写回。
+  内置行没有删除按钮（`mergeRoles` 以内置为底，删了只会回落）；**不要**再引入"继承区/只读清单"那种
+  特殊通道——用户实测两次找不到，等于没做。
 - **面板的「按可用模型补齐」只改草稿**（`fillUnavailableRoutes`）：缺口判定 = provider 不在
   `modelCatalog.groups`（已注册 provider 清单）里；补齐目标 = `modelCatalog.default`，没有则第一个可用
   provider 的第一个模型；换模型会清掉旧 `reasoningEffort`（新模型未必支持）。写入仍走用户点「保存」，

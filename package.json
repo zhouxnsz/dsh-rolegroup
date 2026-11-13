@@ -1,6 +1,6 @@
 {
   "name": "dsh-rolegroup",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "角色化委派插件：把「这类活该用哪个模型」固化为角色（名字 + 绑定模型 + persona），按角色名委派 · Role-based delegation: bind each kind of work to a model once and delegate by role name",
   "icon": "assets/icon.svg",
   "license": "MIT",

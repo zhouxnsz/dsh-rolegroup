@@ -7,7 +7,7 @@ instance, so the tool name is the role name.
 The role/category binding is inspired by
 [oh-my-openagent](https://github.com/code-yeongyu/oh-my-openagent) ("omo"); see §10.
 
-> Version **0.7.0** ｜ dsh **≥ 0.2.1-rc.1** (verified on 0.2.1-rc.3) ｜ MIT
+> Version **0.8.0** ｜ dsh **≥ 0.2.1-rc.1** (verified on 0.2.1-rc.3) ｜ MIT
 
 ---
 
@@ -262,11 +262,16 @@ pre-fills the editor. Save becomes available after you change something; saving 
 whole table, and the panel takes over. If the read fails, the panel falls back to an empty table with manual
 add, an inline error, and a retry. Reset to file config clears both fields and exits takeover.
 
-**After takeover, built-in roles that are missing from the panel table are listed below as a read-only
-"inherited" list** (for example, a built-in role added in a later version for an existing user). The list is
-**not editable, not removable, and never written into the override table** — writing it would turn that role
-into an explicit configuration and **drop its built-in fallback chain** (it would be pruned when the primary
-route is unavailable). To make an inherited role explicit, add a row with the same name.
+**After takeover the panel shows the whole effective table**: built-in roles that are missing from your
+override table (for example, a role added by a later plugin version) are filled in as normal rows carrying the
+built-in route and fallback chain, and can be edited like any other row. Built-in rows have **no remove
+button** (because `mergeRoles` always seeds the built-in table, removing one only reverts it to the built-in
+default); custom rows can be removed.
+
+Every row is saved **with its `fallbackModels`** (the panel does not offer an editor for it, but passes it
+through unchanged). That matters: a panel save is an explicit configuration, and explicit configurations do
+**not** inherit the built-in chain — dropping it would silently disable degradation (the role would be pruned
+when its primary route is unavailable).
 
 The header shows the plugin name and version, plus a GitHub link. The Config file button opens the active
 `rolegroup.jsonc` in the right sidebar's document preview. It closes Settings first so the sidebar is visible.
@@ -356,7 +361,7 @@ fails to activate goes into `invalid[]` and is not registered.
 ```sh
 npm run link:deps     # first after cloning: create the schemastery symlink
 npm install           # then install the esbuild devDependency
-npm test              # offline smoke suite, 155 cases; pretest runs link:deps
+npm test              # offline smoke suite, 156 cases; pretest runs link:deps
 npm run build:client  # after editing src/client/** or lib/roles.js
 ```
 

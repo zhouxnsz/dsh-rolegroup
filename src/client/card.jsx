@@ -43,13 +43,6 @@ const CSS = '.dsh-rg-card{display:grid;gap:10px}'
   + '.dsh-rg-toolName{font-size:13px;font-weight:500;color:var(--dsw-alias-label-primary)}'
   + 'input.dsh-rg-toolName{flex:1;min-width:0;font-size:13px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-2);border:.5px solid var(--dsw-alias-border-l3);border-radius:6px;padding:3px 8px}'
   + '.dsh-rg-remove{color:var(--dsw-alias-label-error);cursor:pointer;background:none;border:0;padding:0;font-size:12px;white-space:nowrap}'
-  + '.dsh-rg-inherited{margin-top:6px;display:grid;gap:4px}'
-  + '.dsh-rg-inheritedDetails summary{cursor:pointer;font-size:12px;color:var(--dsw-alias-label-tertiary)}'
-  + '.dsh-rg-inheritedList{list-style:none;margin:6px 0 0;padding:0;display:grid;gap:4px;max-height:200px;overflow:auto}'
-  + '.dsh-rg-inheritedRow{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:12px;color:var(--dsw-alias-label-tertiary);border:.5px solid var(--dsw-alias-border-l4);border-radius:6px;padding:4px 8px}'
-  + '.dsh-rg-inheritedName{font-weight:500;color:var(--dsw-alias-label-secondary)}'
-  + '.dsh-rg-inheritedBadge{font-size:10px;border:.5px solid var(--dsw-alias-border-l3);border-radius:4px;padding:0 4px}'
-  + '.dsh-rg-inheritedSummary{flex-basis:100%}'
   + '.dsh-rg-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px}'
   + '.dsh-rg-field{display:grid;gap:4px;font-size:11px;color:var(--dsw-alias-label-tertiary);min-width:0}'
   + '.dsh-rg-field input,.dsh-rg-field select,.dsh-rg-field textarea{font-size:13px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-2);border:.5px solid var(--dsw-alias-border-l3);border-radius:6px;padding:4px 8px;min-width:0}'
@@ -371,36 +364,11 @@ export function RolegroupCard(props) {
       <div className="dsh-rg-rows">
         {state.rows.length === 0
           ? state.effective?.status === 'ready'
-            ? (state.takeover && (state.inherited ?? []).length > 0
-              ? null // taken over with an empty table: the inherited list below says it better than "empty"
-              : <p className="dsh-rg-empty">{state.takeover ? t('emptyTakeover') : t('emptyNotTakeover')}</p>)
+            ? <p className="dsh-rg-empty">{state.takeover ? t('emptyTakeover') : t('emptyNotTakeover')}</p>
             : null
           : state.rows.map(renderRow)}
       </div>
-      {(state.inherited ?? []).length > 0 ? (
-        // While taken over, "panel table is smaller than the built-in table" must be VISIBLE; otherwise a
-        // newly added built-in role is invisible here (real v0.8 feedback about `vision`).
-        // Read-only on purpose: no inputs, no remove button, and NEVER written into the override table —
-        // writing it would make that role `strict` and drop its built-in fallback chain.
-        <div className="dsh-rg-inherited" role="note">
-          <p className="dsh-rg-notice">
-            {state.inherited.length} {t('inheritedNotice')}
-          </p>
-          <details className="dsh-rg-inheritedDetails">
-            <summary>{t('inheritedShow')}</summary>
-            <ul className="dsh-rg-inheritedList">
-              {state.inherited.map((row) => (
-                <li className="dsh-rg-inheritedRow" key={row.toolName}>
-                  <span className="dsh-rg-inheritedName">{row.toolName}</span>
-                  <span className="dsh-rg-inheritedRoute">{row.provider} / {row.model}</span>
-                  <span className="dsh-rg-inheritedBadge">{t('inheritedBadge')}</span>
-                  {row.summary ? <span className="dsh-rg-inheritedSummary">{row.summary}</span> : null}
-                </li>
-              ))}
-            </ul>
-          </details>
-        </div>
-      ) : null}
+
       <button type="button" className="dsh-rg-add" disabled={disabled} onClick={props.addRole}>
         + {t('addRole')}
       </button>
