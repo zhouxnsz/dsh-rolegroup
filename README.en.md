@@ -7,7 +7,7 @@ instance, so the tool name is the role name.
 The role/category binding is inspired by
 [oh-my-openagent](https://github.com/code-yeongyu/oh-my-openagent) ("omo"); see §10.
 
-> Version **0.8.2** ｜ dsh **≥ 0.2.1-rc.1** (verified on 0.2.1-rc.3) ｜ MIT
+> Version **0.8.3** ｜ dsh **≥ 0.2.1-rc.1** (verified on 0.2.1-rc.3) ｜ MIT
 
 ---
 
@@ -147,21 +147,20 @@ main session.
 
 ### Recommended bindings (official suggestion)
 
-We pick each role's model from **measurements**, and we distinguish "official recommendation" from
-"built-in default" — they may differ. The full rationale (which models we tested, the method, the full matrix,
-known traps, limitations and re-test triggers) lives in **[MODELS.md](./MODELS.md)**.
+The model behind each role was picked by measurement. The full table, which models we tried, how we scored
+them, and when these conclusions expire all live in **[MODELS.md](./MODELS.md)**; only the essentials are here.
 
-Three takeaways that matter more than a table:
+`coder`, `planner`, `scout` and `scribe` came out flat: all five candidates scored full marks, including the tiers
+that cost ten times less. Do not pay for a flagship there. `vision` is the same story — every candidate read both
+test images correctly, Kimi K3 included.
 
-- **`coder` / `planner` / `scout` / `scribe` have hit the capability ceiling** with these tasks → pick on cost,
-  do not pay for a flagship;
-- **`vision` does not need a flagship**: all four candidates (including Kimi K3) scored full marks on clean images;
-- **two traps**: `qwen3.7-plus` produced a self-contradictory review verdict; **Kimi** failed twice to write the
-  requested artifact in the fallback tasks.
+Only two things actually went wrong. `qwen3.7-plus` listed an issue as "blocking" in a review and then signed off
+as "conditionally approved", contradicting itself. Kimi failed twice to write the requested file in the fallback
+tasks and answered in JSON instead.
 
-> ⚠️ Provider availability depends on your subscription: the built-in defaults point at the author's own
-> subscriptions. On a new machine run `/rolegroup init` to generate a working route table, or compare with
-> `/rolegroup doctor` before editing rows.
+The built-in defaults point at the author's own subscriptions, which you probably do not have. On a new machine run
+`/rolegroup init` — it generates a config from the providers your machine actually registered — and use
+`/rolegroup doctor` to compare before editing rows.
 
 ## 4. Configuration
 

@@ -3954,6 +3954,12 @@ await okAsync('docs: MODELS.md 与内置默认表一致 + README 链接它 + 不
   assert.deepEqual(leaked, [], `MODELS.md 不得链接未公开目录：${leaked.join(', ')}`)
   // 自检：文档确实声明了「暂不推荐」的 v4-pro（用户 2026-11-13 决定）
   assert.ok(md.includes('deepseek-v4-pro') && md.includes('暂不推荐'), 'MODELS.md 必须记录 v4-pro 暂不纳入推荐')
+  // AC-5：写作规则必须存在且被 AGENTS 引用（否则下次又写回"塑料味"）
+  assert.ok(existsSync(join(root, 'STYLE.md')), 'STYLE.md 必须存在')
+  const style = readFileSync(join(root, 'STYLE.md'), 'utf8')
+  assert.ok(style.includes('禁用'), 'STYLE.md 必须包含禁用词清单')
+  assert.ok(style.includes('自检'), 'STYLE.md 必须包含交稿自检')
+  assert.ok(readFileSync(join(root, 'AGENTS.md'), 'utf8').includes('STYLE.md'), 'AGENTS.md 必须引用 STYLE.md')
 })
 
 await okAsync('docs: README.md 与 README.en.md 章节编号 parity（双语防漂移）', async () => {

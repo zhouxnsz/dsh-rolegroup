@@ -183,6 +183,12 @@ npm run build:client  # 重建 lib/client.js
 **无法裸导入 `@deepseek-ai/*`**；而 settings 范式要求条目**静态导出** schemastery `Config`，不能延迟解析。
 故把部署树的 schemastery 软链进本仓库 `node_modules`（软链**不入库**，`pretest` 会自动重建）。
 
+### 文档纪律
+
+给用户看的文档（README / MODELS / CHANGELOG）按 [STYLE.md](./STYLE.md) 写。那份规则是针对"读起来像 AI
+生成"反推出来的：先具体后结论、每段有可核事实、别把每段收尾成总结、加粗与表格要克制。写完按它末尾
+那 6 条自检过一遍。
+
 ### 测试纪律
 
 - **每条新断言都要有证伪力**：写完先"临时破坏实现"确认它变红，再恢复。恒真的断言不算测试。
@@ -197,12 +203,14 @@ npm run build:client  # 重建 lib/client.js
 
 ### 版本纪律（2026-11-13 定，起因：3 周内 0.6.0→0.8.0 五个版本号、零发布、还跳过 0.6.2）
 
-- **未发布期不 bump**：功能/修复提交**不要**动 `package.json` 的 `version`；改动累积，只在 release 提交里定号。
-- **一个 release = 一个提交**：版本号 + `CHANGELOG.md` 条目（+ 必要时重建产物）落在同一提交，并打 `vX.Y.Z` tag。
-- **升号规则**（首发后）：新增角色/配置项/用户可见行为 → **minor**；纯修复/文档/测试 → **patch**；
-  破坏性变更 → 0.x 内 minor 且 README/CHANGELOG 写 `Breaking`，1.0 之后才用 major。
-- **不跳号**：想跳号说明该合并成一次发布。
-- `CHANGELOG.md` 用 Keep-a-Changelog 风格（Added / Changed / Fixed / Breaking），中文为主 + 英文摘要。
+没发布的时候**不要**动 `package.json` 的 `version`，改动累积着，只在 release 那个提交里一次性定号。
+release 提交同时包含版本号、`CHANGELOG.md` 条目（必要时还有重建的产物），并打 `vX.Y.Z` tag。
+
+升号按语义：新增角色、配置项或任何用户可见的行为算 minor；纯修复、文档、测试算 patch；破坏性变更在
+0.x 里用 minor，同时在 README/CHANGELOG 写 `Breaking`，1.0 之后才动 major。
+
+**不要跳号**。想跳号通常说明这些改动该合并成一次发布。`CHANGELOG.md` 按 Keep-a-Changelog 写
+（Added / Changed / Fixed / Breaking），中文为主，末尾附英文摘要。
 
 ## 贡献（PR）
 

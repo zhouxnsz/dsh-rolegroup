@@ -6,7 +6,7 @@ dsh 的角色化委派插件。先定义角色（名字、绑定模型、persona
 角色/类别绑定的思路参考了 [oh-my-openagent](https://github.com/code-yeongyu/oh-my-openagent)（omo），
 详见 §10。
 
-> 版本 **0.8.2** ｜ 要求 dsh **≥ 0.2.1-rc.1**（本机实测 0.2.1-rc.3）｜ MIT
+> 版本 **0.8.3** ｜ 要求 dsh **≥ 0.2.1-rc.1**（本机实测 0.2.1-rc.3）｜ MIT
 
 ---
 
@@ -135,17 +135,17 @@ dsh --profile web --dump-config | grep -A1 dsh-rolegroup   # 应出现 - id: dsh
 
 ### 推荐绑定（官方建议）
 
-我们按**实测**给每个角色定了推荐模型，并区分「官方推荐」与「内置默认」——两者可能不同。
-完整说明（测过哪些模型、方法、全量矩阵、已知坑、局限与重测条件）见 **[MODELS.md](./MODELS.md)**。
+每个角色的模型是我们实测选的。完整表格、测过哪些模型、怎么测的、什么情况下会失效，都在
+**[MODELS.md](./MODELS.md)**，这里只留最要紧的几句。
 
-三条比表格更有用的结论：
+`coder`、`planner`、`scout`、`scribe` 这四个角色，五个候选模型全打平了——包括价格差十倍的档位。所以
+别为它们上旗舰，按成本选就行。`vision` 也一样：干净图上四个模型全部满分，连 Kimi K3 都能看图。
 
-- **`coder` / `planner` / `scout` / `scribe` 已到能力天花板** → 按成本选，别为它们上旗舰；
-- **`vision` 不需要旗舰**：四个候选（含 Kimi K3）在干净图上全部满分；
-- **两个坑**：`qwen3.7-plus` 在 reviewer 上结论自相矛盾；**Kimi 系**在 fallback 上连续两轮不写指定产物。
+真正踩过坑的只有两处。`qwen3.7-plus` 在 reviewer 任务里把问题列成「阻塞」，结论却写「有条件通过」，
+自己跟自己打架；Kimi 系在 fallback 任务上连续两轮没写指定文件，只回了 JSON。
 
-> ⚠️ provider 可用性取决于你的订阅：内置默认指向作者自己的订阅。换机器先跑 `/rolegroup init`
-> 生成一套本机可用的路由，或用 `/rolegroup doctor` 对照后再改。
+内置默认指向的是作者自己的订阅，你大概率没有。换机器先跑 `/rolegroup init`，它会按你机器上真的注册了的
+provider 生成配置；改之前可以用 `/rolegroup doctor` 对照一下。
 
 ## 4. 配置
 
