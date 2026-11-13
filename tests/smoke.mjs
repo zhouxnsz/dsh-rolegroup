@@ -3385,15 +3385,15 @@ await okAsync('controller: 起草后外部推进 revision（模拟他人保存�
   assert.equal(proj.dirty, true, '草稿必须保留，不得静默丢弃')
 })
 
-await okAsync('controller: resetToBase 清用户层（enabled + roles 两个 unset）→ 真正退出接管、rows 回落 base 层值（v0.4/AC-14）', async () => {
+await okAsync('controller: exitToFile 清用户层（enabled + roles 两个 unset）→ 真正退出接管、rows 回落 base 层值（v0.4/AC-14）', async () => {
   const base = SECTION_ALL()
-  const userTable = SECTION_ALL()
+  const userTable = { ...SECTION_ALL(), enabled: true } // 接管态才允许「回到文件配置」
   userTable.roles.find((r) => r.toolName === 'coder').model = 'user-x'
   const scope = makeFakeScope({ value: userTable, base, user: userTable, revision: 5 })
   const controller = new RolegroupCardController(scope, IDLE_CTX())
   const face = controller.inject()
   assert.equal(face.hooks.rolegroupCard.getSnapshot().rows.find((r) => r.toolName === 'coder').model, 'user-x')
-  face.resetToBase()
+  face.exitToFile()
   await flushMicrotasks()
   // v0.4：重置 = enabled + roles 一起 unset，否则 host 仍把 enabled=true 视为「已接管」
   assert.equal(scope.calls.mutate.length, 1, '重置应走一次 mutate（两个 unset）')
@@ -3519,6 +3519,85 @@ await okAsync('client-card: 不再有特殊「继承区」——所有角色都�
       assert.equal(Object.hasOwn(dict, key), false, `${name}.${key} 必须删除（不再有特殊处理）`)
     }
   }
+})
+
+await okAsync('controller: restoreOfficial = 零覆盖接管（只写 enabled=true + roles=[]，不写模型名）（v0.10/AC-1）', async () => {
+  const section = SECTION_ALL()
+  const scope = makeFakeScope({ value: { ...section, enabled: true }, base: section, revision: 7 })
+  let fetchCount = 0
+  const controller = new RolegroupCardController(scope, IDLE_CTX(), {
+    fetch: async () => { fetchCount += 1; return { ok: true, json: async () => ({ ok: true, active: 'builtin', effective: { roles: section.roles } }) } },
+  })
+  const face = controller.inject()
+  await face.restoreOfficial()
+  await flushMicrotasks()
+  assert.equal(scope.calls.mutate.length, 1, '必须恰好一次 mutate')
+  assert.deepEqual(scope.calls.mutate[0].ops, [
+    { op: 'set', path: ['enabled'], value: true },
+    { op: 'set', path: ['roles'], value: [] },
+  ], '恢复官方推荐 = 零覆盖接管；不得把 8 行模型名抄进配置（否则以后内置默认变了也不跟随）')
+  assert.equal(fetchCount >= 1, true, '动作后必须重新拉取生效表（预填要跟着变）')
+  const proj = face.hooks.rolegroupCard.getSnapshot()
+  assert.equal(proj.mode, 'official', '零覆盖接管后投影必须是 official')
+})
+
+await okAsync('controller: exitToFile 未接管时不可用；接管时 unset 两字段且**必定**刷新预填（v0.10/AC-2）', async () => {
+  const section = SECTION_ALL()
+  // ① 未接管 → 拒绝执行（按钮也会禁用）
+  const idle = makeFakeScope({ value: section, base: section })
+  const idleFace = new RolegroupCardController(idle, IDLE_CTX()).inject()
+  await idleFace.exitToFile()
+  await flushMicrotasks()
+  assert.equal(idle.calls.mutate.length, 0, '非接管态点「回到文件配置」不得发 mutate')
+
+  // ② 接管态：即使客户端快照仍显示 enabled=true（重置瞬间的真实情况），也必须重新拉预填
+  const scope = makeFakeScope({ value: { ...section, enabled: true }, base: section, revision: 3 })
+  // 关键：模拟「客户端快照还没更新」的真实竞态——mutate 只记账、不更新快照也不 notify。
+  // 这样刷新只能由 exitToFile 自己发起；若它用 isTakeover() 做 guard，就会跳过（旧 bug）。
+  scope.mutate = async (ops) => { scope.calls.mutate.push({ ops: JSON.parse(JSON.stringify(ops)) }); return 4 }
+  let fetchCount = 0
+  const controller = new RolegroupCardController(scope, IDLE_CTX(), {
+    fetch: async () => { fetchCount += 1; return { ok: true, json: async () => ({ ok: true, active: 'file', file: { path: '/home/u/.dsh/rolegroup.jsonc' }, effective: { roles: section.roles } }) } },
+  })
+  const face = controller.inject()
+  await face.exitToFile()
+  await flushMicrotasks()
+  assert.deepEqual(scope.calls.mutate[0].ops, [
+    { op: 'unset', path: ['enabled'] },
+    { op: 'unset', path: ['roles'] },
+  ])
+  assert.equal(fetchCount >= 1, true, '重置后必须重新拉取 —— 旧实现用 isTakeover() 做 guard，快照未更新时会跳过（用户实测踩到）')
+  assert.deepEqual(face.hooks.rolegroupCard.getSnapshot().landing, { kind: 'file', path: '/home/u/.dsh/rolegroup.jsonc' },
+    '落点预告必须来自 host 快照的 file.path')
+})
+
+ok('controller: projection.mode 三态（official / file / custom）（v0.10/AC-3）', () => {
+  const section = SECTION_ALL()
+  const modeOf = (value, effectiveSource) => {
+    const controller = new RolegroupCardController(makeFakeScope({ value, base: section }), IDLE_CTX())
+    controller.effective = { status: 'ready', roles: section.roles, error: undefined, source: effectiveSource, landing: undefined }
+    return controller.projection().mode
+  }
+  assert.equal(modeOf({ ...section, enabled: true, roles: [] }, 'panel'), 'official', '接管 + 零覆盖 = 跟随官方推荐')
+  assert.equal(modeOf({ ...section, enabled: true }, 'panel'), 'custom', '接管 + 有行 = 面板自定义')
+  assert.equal(modeOf(section, 'file'), 'file', '未接管 + 文件 = 使用文件配置')
+  assert.equal(modeOf(section, 'builtin'), 'official', '未接管 + 无文件 = 官方推荐')
+})
+
+ok('client-locales: 两个动作的措辞不得互相冒充（v0.10/AC-4）', async () => {
+  const { zh, en } = await import(new URL('../src/client/locales.js', import.meta.url))
+  // 「回到文件配置」不得让人以为会回出厂
+  for (const [name, dict] of [['zh', zh], ['en', en]]) {
+    for (const banned of ['默认', '推荐', '出厂', '恢复', 'default', 'recommend', 'factory', 'restore']) {
+      assert.equal(dict.exitToFile.toLowerCase().includes(banned.toLowerCase()), false,
+        `${name}.exitToFile 不得含「${banned}」（它只是退出接管，结果取决于有没有 jsonc）`)
+    }
+  }
+  assert.ok(zh.restoreOfficial.includes('官方推荐'), zh.restoreOfficial)
+  assert.ok(/official defaults/i.test(en.restoreOfficial), en.restoreOfficial)
+  // 落点预告必须存在
+  assert.ok(zh.exitToFileHintFile && zh.exitToFileHintBuiltin && en.exitToFileHintFile && en.exitToFileHintBuiltin,
+    '必须有落点预告文案')
 })
 
 await okAsync('controller: addRole/removeRole 增删草稿行；非法行（空 provider）投影 invalidFields 且 save 本地拦截（v0.3/AC-26）', async () => {
@@ -4122,7 +4201,7 @@ await okAsync('client-card: 未接管 → 一行状态 + 空态引导；长层�
   const card = readFileSync(fileURLToPath(new URL('../src/client/card.jsx', import.meta.url)), 'utf8')
   const { zh, en } = await import(new URL('../src/client/locales.js', import.meta.url))
   for (const [name, dict] of [['zh', zh], ['en', en]]) {
-    for (const key of ['statusNotTakeover', 'statusTakeover', 'emptyNotTakeover', 'emptyTakeover', 'layerSummary', 'layerNote']) {
+    for (const key of ['statusOfficial', 'statusFile', 'statusCustom', 'emptyNotTakeover', 'emptyTakeover', 'layerSummary', 'layerNote']) {
       assert.ok(typeof dict[key] === 'string' && dict[key] !== '', `${name}.${key} 必须存在且非空`)
     }
     // 旧的整段说明词条必须删除——防止以后又把长段落加回页面
@@ -4130,7 +4209,7 @@ await okAsync('client-card: 未接管 → 一行状态 + 空态引导；长层�
       `${name} 词典不得保留整段说明词条（notTakeover / takeoverNote）`)
   }
   // 一行状态挂在 takeover 分支上；空态也分两种模式
-  assert.ok(/state\.takeover \? t\('statusTakeover'\) : t\('statusNotTakeover'\)/.test(card),
+  assert.ok(/state\.mode === 'official'/.test(card) && /state\.mode === 'file'/.test(card),
     '状态行必须按 takeover 分支渲染，且只渲染一行')
   assert.ok(card.includes("t('emptyTakeover')") && card.includes("t('emptyNotTakeover')"),
     '空表必须给出空态引导（两种模式各一句）')
@@ -4152,12 +4231,12 @@ await okAsync('client-card: 已接管 → 状态行与空态都切到接管语�
   // 否则用户会以为只写在 jsonc 里的角色还在沿用。现在该语义由状态行 + 折叠说明共同承载。
   const card = readFileSync(fileURLToPath(new URL('../src/client/card.jsx', import.meta.url)), 'utf8')
   const { zh, en } = await import(new URL('../src/client/locales.js', import.meta.url))
-  assert.ok(zh.statusTakeover.includes('本面板') && zh.statusTakeover.includes('内置表'), zh.statusTakeover)
-  assert.ok(/this panel/i.test(en.statusTakeover) && /built-in table/i.test(en.statusTakeover), en.statusTakeover)
+  assert.ok(zh.statusCustom.includes('面板自定义'), zh.statusCustom)
+  assert.ok(/panel overrides/i.test(en.statusCustom), en.statusCustom)
   assert.ok(zh.emptyTakeover.includes('内置表'), zh.emptyTakeover)
   assert.ok(/built-in table/i.test(en.emptyTakeover), en.emptyTakeover)
-  // 接管态用实心状态点（.dsh-rg-statusOn）区分；未接管不带该类
-  assert.ok(/state\.takeover \? ' dsh-rg-statusOn' : ''/.test(card), '状态点必须只在接管态点亮')
+  // 只有「面板自定义」态点亮状态点；官方推荐/文件配置是跟随状态，不该显得像需要处理
+  assert.ok(/state\.mode === 'custom' \? ' dsh-rg-statusOn' : ''/.test(card), '状态点必须只在自定义覆盖态点亮')
 })
 
 ok('client-card: 内置角色行不渲染删除按钮（与既有自定义行规则一致，无特殊处理）（v0.8/AC-3）', () => {
@@ -4271,7 +4350,7 @@ await okAsync('client-bundle: 真实产物的头部渲染出「角色配置 v<�
       t: (key) => zh[key],
       view: 'page',
       useRolegroupCard: (selector) => selector(projection),
-      editRole() {}, addRole() {}, removeRole() {}, save() {}, discard() {}, resetToBase() {}, retryCatalog() {},
+      editRole() {}, addRole() {}, removeRole() {}, save() {}, discard() {}, restoreOfficial() {}, exitToFile() {}, retryCatalog() {},
       openConfig: cardActions.openConfig, closeConfig: cardActions.closeConfig, refreshConfig: cardActions.refreshConfig,
     })
     const nodes = []
@@ -4294,6 +4373,7 @@ await okAsync('client-bundle: 真实产物的头部渲染出「角色配置 v<�
   }
   const baseProjection = {
     available: true, writable: true, takeover: false, dirty: true, saving: false,
+    mode: 'file', overrides: 0, landing: { kind: 'file', path: '/home/u/.dsh/rolegroup.jsonc' },
     failed: false, conflicted: false, rows: [],
     catalog: { status: 'idle', groups: [], partial: false }, routeGaps: [], basePresent: true,
     effective: { required: true, status: 'ready', error: undefined, prefilled: true },
@@ -4341,7 +4421,7 @@ await okAsync('client-bundle: 真实产物的头部渲染出「角色配置 v<�
   assert.equal(configButton.props.disabled, false, '空闲态按钮必须可点击')
 
   // 未接管：可见文案只有一行状态 + 空态引导；长层级说明必须在默认收起的 <details> 里。
-  assert.ok(nodes.some((node) => textOf(node) === zh.statusNotTakeover), '未接管必须渲染一行状态')
+  assert.ok(nodes.some((node) => collectTexts(node).join('').includes(zh.statusFile)), '文件配置态必须渲染一行状态')
   assert.ok(nodes.some((node) => textOf(node) === zh.emptyNotTakeover), '空表必须渲染未接管空态引导')
   const layer = nodes.find((node) => node.type === 'details' && node.props?.className === 'dsh-rg-layer')
   assert.ok(layer, '层级说明必须是 <details> 折叠块')
@@ -4351,10 +4431,16 @@ await okAsync('client-bundle: 真实产物的头部渲染出「角色配置 v<�
   assert.ok(layerTexts.includes(zh.layerNote), '完整层级说明必须在折叠块内')
 
   // 已接管：同一组件换投影后，状态行与空态都切到接管语义。
-  const takeoverNodes = renderCard({ ...baseProjection, takeover: true, effective: { required: false, status: 'ready', error: undefined, prefilled: false } })
-  assert.ok(takeoverNodes.some((node) => textOf(node) === zh.statusTakeover), '接管态必须渲染接管状态行')
+  const takeoverNodes = renderCard({
+    ...baseProjection,
+    takeover: true,
+    mode: 'custom',
+    overrides: 8,
+    effective: { required: false, status: 'ready', error: undefined, prefilled: false },
+  })
+  assert.ok(takeoverNodes.some((node) => collectTexts(node).join('').includes(zh.statusCustom)), '自定义态必须渲染自定义状态行')
   assert.ok(takeoverNodes.some((node) => textOf(node) === zh.emptyTakeover), '接管态空表必须渲染接管空态')
-  assert.ok(!takeoverNodes.some((node) => textOf(node) === zh.statusNotTakeover), '接管态不得残留未接管文案')
+  assert.ok(!takeoverNodes.some((node) => collectTexts(node).join('').includes(zh.statusFile)), '自定义态不得残留文件配置文案')
   assert.ok(takeoverNodes.some((node) => node.props?.className === 'dsh-rg-status dsh-rg-statusOn'),
     '接管态状态行必须带点亮类')
 

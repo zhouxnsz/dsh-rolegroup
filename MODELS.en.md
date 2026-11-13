@@ -1,6 +1,8 @@
 # Roles and recommended models
 
-This page lists the officially recommended model for each role.
+This page mirrors the built-in role table — the model each role ships with. **What is active on your machine may
+differ**: panel overrides or a `rolegroup.jsonc` take precedence. To get back to these values, click "Restore
+official defaults" in the panel.
 
 | Role | Recommended model |
 |---|---|

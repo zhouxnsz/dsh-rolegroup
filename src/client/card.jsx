@@ -176,7 +176,10 @@ export function RolegroupCard(props) {
   const groups = state.catalog.groups
   const modelsOf = (provider) => groups.find((group) => group.id === provider)?.models ?? []
 
-  const renderRow = (row) => {
+  /** Show the file name only: a full path would blow up the status line. */
+const baseNameOf = (path) => (typeof path === 'string' ? path.split('/').pop() ?? path : '')
+
+const renderRow = (row) => {
     const modelInfo = modelsOf(row.provider).find((model) => model.id === row.model)
     const efforts = Array.isArray(modelInfo?.reasoning?.efforts) ? modelInfo.reasoning.efforts : []
     const defaultEffort = modelInfo?.reasoning?.defaultEffort
@@ -316,12 +319,22 @@ export function RolegroupCard(props) {
           all-or-nothing takeover, doctor) sit in a collapsed <details> so they never dominate
           the page. Direct users skip paragraphs — 2026-10-21 user feedback. */}
       <div className="dsh-rg-statusBlock">
-        <p className={`dsh-rg-status${state.takeover ? ' dsh-rg-statusOn' : ''}`} role="status">
-          {state.takeover ? t('statusTakeover') : t('statusNotTakeover')}
+        <p className={`dsh-rg-status${state.mode === 'custom' ? ' dsh-rg-statusOn' : ''}`} role="status">
+          {state.mode === 'official'
+            ? t('statusOfficial')
+            : state.mode === 'file'
+              ? `${t('statusFile')}（${t('sourceFile')}: ${baseNameOf(state.landing?.path)}）`
+              : `${t('statusCustom')}（${state.overrides ?? 0} ${t('overridesCount')}）`}
         </p>
         <details className="dsh-rg-layer">
           <summary>{t('layerSummary')}</summary>
           <p>{t('layerNote')}</p>
+          {/* The factory table is a read-only reference, not a restore target: link it so
+              users do not have to dig through the repo. */}
+          <p>
+            {t('modelsDocHint')}{' '}
+            <a href={`${PLUGIN_REPO_URL}/blob/main/MODELS.md`} target="_blank" rel="noreferrer">MODELS.md</a>
+          </p>
         </details>
       </div>
       {(state.routeGaps ?? []).length > 0 ? (
@@ -379,10 +392,24 @@ export function RolegroupCard(props) {
         <button type="button" disabled={disabled || !state.dirty} onClick={props.discard}>
           {t('discard')}
         </button>
-        <button type="button" disabled={disabled} onClick={props.resetToBase}>
-          {t('resetToBase')}
+        {/* Official defaults = zero-override takeover: no model names are written, so future
+            built-in default changes are followed automatically. */}
+        <button type="button" disabled={disabled || state.mode === 'official'} onClick={props.restoreOfficial}>
+          {t('restoreOfficial')}
+        </button>
+        {/* Back to file config: the outcome depends on whether a jsonc exists, so the
+            landing target is previewed right below the buttons. */}
+        <button type="button" disabled={disabled || !state.takeover} onClick={props.exitToFile}>
+          {t('exitToFile')}
         </button>
       </div>
+      {state.takeover ? (
+        <p className="dsh-rg-liveHint">
+          {state.landing?.kind === 'file'
+            ? `${t('exitToFileHintFile')} ${state.landing.path}`
+            : t('exitToFileHintBuiltin')}
+        </p>
+      ) : null}
       <p className="dsh-rg-liveHint">{t('liveHint')}</p>
     </div>
   )

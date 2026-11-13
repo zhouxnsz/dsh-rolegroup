@@ -7,7 +7,7 @@ instance, so the tool name is the role name.
 The role/category binding is inspired by
 [oh-my-openagent](https://github.com/code-yeongyu/oh-my-openagent) ("omo"); see §10.
 
-> Version **0.9.0** ｜ dsh **≥ 0.2.1-rc.1** (verified on 0.2.1-rc.3) ｜ MIT
+> Version **0.10.0** ｜ dsh **≥ 0.2.1-rc.1** (verified on 0.2.1-rc.3) ｜ MIT
 
 ---
 
@@ -265,10 +265,26 @@ When some roles name a provider that is not registered on this machine, the pane
 pointed at the deployment default route (or the first available model when there is no default). Only the draft
 changes — you still click Save.
 
-The panel does not take over by itself. Before takeover it reads the active table (jsonc or built-in) and
-pre-fills the editor. Save becomes available after you change something; saving writes `enabled=true` and the
-whole table, and the panel takes over. If the read fails, the panel falls back to an empty table with manual
-add, an inline error, and a retry. Reset to file config clears both fields and exits takeover.
+One line at the top of the panel says which layer is active — there are only three:
+
+| State | Meaning |
+|---|---|
+| **Official defaults (built-in table)** | no overrides at all, or you clicked "Restore official defaults" (zero-override takeover) |
+| **File config** | no takeover; `rolegroup.jsonc` (project or user) is what applies |
+| **Panel overrides** | the panel took over and wrote N override rows |
+
+Four actions:
+
+- **Save** — write the draft as panel overrides (`enabled=true` + the whole table).
+- **Discard** — drop the draft, change nothing.
+- **Restore official defaults** — zero-override takeover, so the effective table equals the built-in one. It
+  writes **no model names**, so future changes to the shipped defaults are followed automatically.
+- **Back to file config** — exit takeover (clear `enabled` and `roles`) and fall back to `rolegroup.jsonc`.
+  **The outcome depends on whether a config file exists on your machine**, so the landing target is previewed
+  below the buttons: the file path when there is one, or "falls back to the built-in table" when there is not.
+  It is not the same thing as restoring the official defaults.
+
+If the read fails, the panel falls back to an empty table with manual add, an inline error and a retry.
 
 **After takeover the panel shows the whole effective table**: built-in roles that are missing from your
 override table (for example, a role added by a later plugin version) are filled in as normal rows carrying the

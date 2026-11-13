@@ -135,7 +135,8 @@ export class RolegroupCardController {
     // 「配置文件」按钮：status = idle|loading|error；notice = undefined|'noFile'。
     this.config = { status: 'idle', error: undefined, notice: undefined }
     // 未接管时的预填数据：来自 host 快照的当前生效表（jsonc / 内置表）。
-    this.effective = { status: 'idle', roles: [], error: undefined }
+    // source: 'panel' | 'file' | 'builtin'（host 快照 active）；landing: 退回文件层时的落点
+    this.effective = { status: 'idle', roles: [], error: undefined, source: undefined, landing: undefined }
     this.lastTakeover = this.scope.getSnapshot().value?.enabled === true
     this.saveGeneration = 0
     this.catalogGeneration = 0
@@ -160,7 +161,8 @@ export class RolegroupCardController {
       removeRole: (toolName) => this.removeRole(toolName),
       save: () => { this.save() },
       discard: () => this.discard(),
-      resetToBase: () => { this.resetToBase() },
+      restoreOfficial: () => { this.restoreOfficial() },
+      exitToFile: () => { this.exitToFile() },
       retryCatalog: () => this.retryCatalog(),
       fillUnavailableRoutes: () => this.fillUnavailableRoutes(),
       retryEffective: () => this.retryEffective(),
@@ -407,9 +409,34 @@ export class RolegroupCardController {
   }
 
   /** 重置为文件配置：清用户层的 enabled + roles → 真正退出接管，回落 jsonc 链。 */
-  async resetToBase() {
+  /**
+   * 恢复官方推荐：**零覆盖**接管。
+   *
+   * `enabled=true` + `roles=[]` 在 `mergeRoles` 语义下等于「不做任何覆盖」→ 生效表就是内置表。
+   * 不写任何模型名，所以以后内置默认变了会自动跟上，也不会因为抄写而产生过期副本。
+   */
+  async restoreOfficial() {
     if (this.disposed || this.saving) return
     if (this.scope.getSnapshot().writable !== true) return
+    this.clearDraft()
+    this.publish()
+    await this.scope.mutate([
+      { op: 'set', path: ['enabled'], value: true },
+      { op: 'set', path: ['roles'], value: [] },
+    ])
+    if (this.disposed) return
+    if (this.effective.status !== 'loading') void this.loadEffective()
+    this.publish()
+  }
+
+  /**
+   * 回到文件配置：退出面板接管（unset enabled/roles），回落到 jsonc 链；没有 jsonc 才等于内置表。
+   * 与 `restoreOfficial` 是两件事——这个动作的结果取决于用户机器上有没有配置文件。
+   */
+  async exitToFile() {
+    if (this.disposed || this.saving) return
+    if (this.scope.getSnapshot().writable !== true) return
+    if (!this.isTakeover()) return // 未接管时点了没意义：禁用（card 侧也按此禁用）
     this.clearDraft()
     this.publish()
     await this.scope.mutate([
@@ -417,8 +444,9 @@ export class RolegroupCardController {
       { op: 'unset', path: ['roles'] },
     ])
     if (this.disposed) return
-    // 退出接管后基准回到 jsonc / 内置表：预填数据必须重新按文件读一次。
-    if (!this.isTakeover() && this.effective.status !== 'loading') void this.loadEffective()
+    // ⚠️ 这里**不能**再判 isTakeover()：重置瞬间客户端快照可能还是 enabled=true，
+    // 那个 guard 会跳过刷新，面板继续显示旧表（2026-11-13 用户实测踩到）。
+    if (this.effective.status !== 'loading') void this.loadEffective()
     this.publish()
   }
 
@@ -490,6 +518,10 @@ export class RolegroupCardController {
       if (payload?.ok !== true) throw new Error(payload?.error?.message ?? 'config info unavailable')
       const roles = payload?.effective?.roles
       this.effective.roles = Array.isArray(roles) ? roles : []
+      this.effective.source = typeof payload?.active === 'string' ? payload.active : undefined
+      // 「回到文件配置」的落点预告：快照里有文件就落到它，没有就落内置表。
+      const filePath = typeof payload?.file?.path === 'string' ? payload.file.path : undefined
+      this.effective.landing = filePath === undefined ? { kind: 'builtin' } : { kind: 'file', path: filePath }
       this.effective.status = 'ready'
     } catch (error) {
       if (generation !== this.effectiveGeneration || this.disposed) return
@@ -590,6 +622,14 @@ export class RolegroupCardController {
       /** 面板是否已接管生效表（host 侧 Config.enabled）。未接管时 rows 来自 host 快照预填，
        *  不是空表；saving 后由本面板接管。 */
       takeover,
+      /** 三态：official = 跟随官方推荐（零覆盖/无配置）；file = 使用 jsonc；custom = 面板自定义覆盖。 */
+      mode: takeover
+        ? ((snapshot.value?.roles ?? []).length > 0 ? 'custom' : 'official')
+        : (this.effective.status !== 'ready'
+          ? 'loading'
+          : (this.effective.source === 'builtin' ? 'official' : 'file')),
+      /** 「回到文件配置」的落点预告（有 jsonc → 文件；没有 → 内置表）。 */
+      landing: this.effective.landing,
       dirty: this.isDirty(),
       saving: this.saving,
       failed: this.failed,
