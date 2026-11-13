@@ -3135,7 +3135,7 @@ await okAsync('config-info: apply 真的装上路由，快照按当前生效层�
   }
 })
 
-await okAsync('config-info: 面板保存（volatile 重组装）后快照仍报**配置层生效表**，不退化成覆盖表（v0.9 回归锁）', async () => {
+await okAsync('config-info: 面板保存（volatile 重组装）后快照仍报**配置层生效表**，不退化成覆盖表（v0.7 回归锁）', async () => {
   const tmp = await mkdtemp(join(tmpdir(), 'dsh-rg-config-drift-'))
   const prevHome = process.env.DSH_HOME
   process.env.DSH_HOME = tmp
@@ -3407,6 +3407,66 @@ await okAsync('controller: catalog 懒加载 + 合并——ready/partial、已�
   assert.ok(qwen, '已存 provider 不在目录时必须保留该组（不静默丢配置）')
   assert.ok(qwen.models.some((m) => m.id === 'qwen3.8-max' && m.available === false), JSON.stringify(qwen))
   assert.ok(notices.length >= 1, '投影变化必须通知订阅者')
+})
+
+// --- v0.9：接管态下的「继承自内置」行（只读展示，绝不写入覆盖表）---
+ok('controller: 接管态下未覆盖的内置角色进入 projection.inherited，rows 仍只有覆盖行（v0.7/AC-1）', () => {
+  const seven = SECTION_ALL().roles.filter((r) => r.toolName !== 'vision') // 模拟老用户：面板只写了 7 行
+  const scope = makeFakeScope({ value: { roles: seven, enabled: true }, base: SECTION_ALL() })
+  const snap = new RolegroupCardController(scope, IDLE_CTX()).inject().hooks.rolegroupCard.getSnapshot()
+  assert.equal(snap.takeover, true)
+  assert.equal(snap.rows.length, seven.length, 'rows 必须仍只有覆盖行')
+  assert.deepEqual(snap.inherited.map((r) => r.toolName), ['vision'], '未覆盖的内置角色必须出现在 inherited')
+  assert.equal(snap.inherited[0].provider, 'qwen-token-plan-cn')
+  assert.equal(snap.inherited[0].model, 'qwen3.8-flash')
+  assert.ok(snap.inherited[0].summary.includes('图'), '必须带 summary 供只读展示')
+  assert.equal(snap.dirty, false, 'inherited 不得污染 dirty')
+})
+
+ok('controller: 继承行永不写入覆盖表（save 载荷只含草稿行）（v0.7/AC-2）', async () => {
+  const seven = SECTION_ALL().roles.filter((r) => r.toolName !== 'vision')
+  const calls = []
+  const scope = makeFakeScope({ value: { roles: seven, enabled: true }, base: SECTION_ALL() })
+  scope.mutate = async (ops, revision) => { calls.push({ ops, revision }); return revision + 1 }
+  const controller = new RolegroupCardController(scope, IDLE_CTX())
+  const face = controller.inject()
+  face.editRole('coder', 'model', 'k3-edited')
+  await face.save()
+  assert.equal(calls.length, 1, '必须恰好一次 mutate')
+  const rolesOp = calls[0].ops.find((op) => op.path.join('.') === 'roles')
+  assert.equal(rolesOp.value.length, seven.length, '保存载荷必须与覆盖行数量一致')
+  assert.ok(!rolesOp.value.some((r) => r.toolName === 'vision'), '继承行绝不能被写进覆盖表（否则 vision 变 strict，丢内置备用链）')
+})
+
+ok('controller: 改名的空位按层语义回落为 inherited，且不出现同名两行（v0.7/AC-3）', () => {
+  const seven = SECTION_ALL().roles.filter((r) => r.toolName !== 'vision')
+  const scope = makeFakeScope({ value: { roles: seven, enabled: true }, base: SECTION_ALL() })
+  const controller = new RolegroupCardController(scope, IDLE_CTX())
+  const face = controller.inject()
+  const snapOf = () => face.hooks.rolegroupCard.getSnapshot()
+  assert.deepEqual(snapOf().inherited.map((r) => r.toolName), ['vision'])
+  // 把 scribe 行改名为 vision：覆盖表里「scribe」空出来 → scribe 回落内置，vision 被覆盖
+  face.editRole('scribe', 'toolName', 'vision') // 卡片走 editRole(…,'toolName',…)，内部转 renameRole
+  assert.deepEqual(snapOf().inherited.map((r) => r.toolName), ['scribe'],
+    '空出来的名字按层语义回落内置（这是整层语义的正确结果，不做拦截）')
+  assert.equal(snapOf().rows.filter((r) => r.toolName === 'vision').length, 1, '覆盖表里不得出现同名两行')
+  assert.equal(snapOf().inherited.some((r) => r.toolName === 'vision'), false, '已覆盖的名字不得再列为继承')
+  face.editRole('vision', 'toolName', 'scribe')
+  assert.deepEqual(snapOf().inherited.map((r) => r.toolName), ['vision'], '改回去 → 继承关系复原')
+})
+
+ok('controller: 未接管 / 接管但空表时的 inherited 口径（v0.7/AC-1 边界）', () => {
+  // ① 未接管：rows 已由 host 快照全量预填 → inherited 必须为空（避免重复展示）
+  const base = SECTION_ALL()
+  const plain = new RolegroupCardController(makeFakeScope({ value: base, base }), IDLE_CTX())
+  assert.deepEqual(plain.inject().hooks.rolegroupCard.getSnapshot().inherited, [])
+  // ② 接管但覆盖表为空：rows=[]、inherited=全部内置角色
+  const empty = new RolegroupCardController(
+    makeFakeScope({ value: { roles: [], enabled: true }, base }), IDLE_CTX(),
+  )
+  const snap = empty.inject().hooks.rolegroupCard.getSnapshot()
+  assert.equal(snap.rows.length, 0)
+  assert.equal(snap.inherited.length, BUILTIN_COUNT)
 })
 
 await okAsync('controller: addRole/removeRole 增删草稿行；非法行（空 provider）投影 invalidFields 且 save 本地拦截（v0.3/AC-26）', async () => {
@@ -4001,6 +4061,32 @@ await okAsync('client-card: 已接管 → 状态行与空态都切到接管语�
   assert.ok(/built-in table/i.test(en.emptyTakeover), en.emptyTakeover)
   // 接管态用实心状态点（.dsh-rg-statusOn）区分；未接管不带该类
   assert.ok(/state\.takeover \? ' dsh-rg-statusOn' : ''/.test(card), '状态点必须只在接管态点亮')
+})
+
+await okAsync('client-card: 接管态渲染只读继承清单（无输入/删除控件，全部走 t()）（v0.7/AC-4）', async () => {
+  const card = readFileSync(fileURLToPath(new URL('../src/client/card.jsx', import.meta.url)), 'utf8')
+  assert.ok(card.includes('state.inherited'), 'card.jsx 必须读 projection.inherited')
+  // 抽出继承区块，锁死「只读」：不得出现任何编辑/删除控件
+  const start = card.indexOf('{(state.inherited ?? []).length > 0 ? (')
+  assert.ok(start > 0, '必须存在继承区块')
+  const end = card.indexOf(') : null}', start)
+  assert.ok(end > start, '继承区块必须闭合')
+  const inheritedBlock = card.slice(start, end)
+  for (const forbidden of ['removeRole', 'editRole', 'addRole', '<input', '<select', '<textarea', 'routeGaps']) {
+    assert.equal(inheritedBlock.includes(forbidden), false, `继承区块不得含 ${forbidden}（只读展示，绝不写覆盖表）`)
+  }
+  assert.ok(inheritedBlock.includes("t('inheritedNotice')"), '提示行走词典')
+  assert.ok(inheritedBlock.includes("t('inheritedShow')"), '折叠标题走词典')
+  assert.ok(inheritedBlock.includes("t('inheritedBadge')"), '内置徽标走词典')
+  // 空态自相矛盾回归锁：接管 + 有继承行时不得再渲染 emptyTakeover
+  assert.ok(/state\.takeover && \(state\.inherited \?\? \[\]\)\.length > 0/.test(card),
+    '接管且存在继承行时必须抑制 emptyTakeover（否则同一屏既说"空"又列出角色）')
+  const { zh, en } = await import(new URL('../src/client/locales.js', import.meta.url))
+  for (const [name, dict] of [['zh', zh], ['en', en]]) {
+    for (const key of ['inheritedNotice', 'inheritedShow', 'inheritedBadge']) {
+      assert.ok(typeof dict[key] === 'string' && dict[key] !== '', `${name}.${key} 必须存在且非空`)
+    }
+  }
 })
 
 ok('client-card: card.jsx 全文无硬编码 CJK——所有文案走 t()（v0.3/AC-28）', () => {

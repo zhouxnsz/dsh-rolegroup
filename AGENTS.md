@@ -189,6 +189,15 @@ npm run build:client  # 重建 lib/client.js
 - 提交信息写清 **背景 / 改法 / BREAKING / 验证**；行为破坏性变更加 `!` 与 `BREAKING CHANGE:`。
 - 面向用户的行为变更要有 README 对应段落（中英同步）。
 
+### 版本纪律（2026-11-13 定，起因：3 周内 0.6.0→0.8.0 五个版本号、零发布、还跳过 0.6.2）
+
+- **未发布期不 bump**：功能/修复提交**不要**动 `package.json` 的 `version`；改动累积，只在 release 提交里定号。
+- **一个 release = 一个提交**：版本号 + `CHANGELOG.md` 条目（+ 必要时重建产物）落在同一提交，并打 `vX.Y.Z` tag。
+- **升号规则**（首发后）：新增角色/配置项/用户可见行为 → **minor**；纯修复/文档/测试 → **patch**；
+  破坏性变更 → 0.x 内 minor 且 README/CHANGELOG 写 `Breaking`，1.0 之后才用 major。
+- **不跳号**：想跳号说明该合并成一次发布。
+- `CHANGELOG.md` 用 Keep-a-Changelog 风格（Added / Changed / Fixed / Breaking），中文为主 + 英文摘要。
+
 ## 贡献（PR）
 
 - 先开 issue 说清要解决的问题，或在 PR 描述里写清 **问题 → 改法 → 验证方式**。

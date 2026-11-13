@@ -164,6 +164,32 @@ export class RolegroupCardController {
     return [...(this.drafts?.values() ?? [])]
   }
 
+  /**
+   * 接管态下「未覆盖的内置角色」——只读展示，**绝不写入覆盖表**。
+   *
+   * 为什么必须只读：`mergeRoles` 对"用户在配置里写了"的角色打 `strict`，一旦把某个内置角色
+   * materialize 进 `roles[]`，它的内置 `fallbackModels` 就不再生效 → 主路由不可用时会直接被剪枝。
+   *
+   * 数据源刻意是**客户端已有的 `DEFAULT_ROLES` 差集**，不走 host 快照：
+   * ① 零接口零 fetch；② 快照在 volatile 更新后会退化成覆盖表（host 侧另有修复），不可依赖。
+   * 未接管时 rows 已由 host 快照全量预填 → 返回空数组，避免重复展示。
+   * @returns {Array<{toolName: string, provider: string, model: string, summary: string}>}
+   */
+  inheritedRows() {
+    const snapshot = this.scope.getSnapshot()
+    if (snapshot.value?.enabled !== true) return []
+    const shown = this.drafts !== undefined ? this.draftRows() : this.effectiveRows()
+    const overridden = new Set(shown.map((row) => row.toolName))
+    return Object.entries(DEFAULT_ROLES)
+      .filter(([toolName]) => !overridden.has(toolName))
+      .map(([toolName, role]) => ({
+        toolName,
+        provider: role.provider,
+        model: role.model,
+        summary: typeof role.summary === 'string' ? role.summary : '',
+      }))
+  }
+
   isDirty() {
     return this.drafts !== undefined && serializeRows(this.draftRows()) !== serializeRows(this.effectiveRows())
   }
@@ -551,6 +577,8 @@ export class RolegroupCardController {
       failed: this.failed,
       conflicted: this.conflicted,
       rows,
+      /** 未覆盖的内置角色（只读）：让「面板表比内置表少」这件事可见，而不是静默隐身。 */
+      inherited: this.inheritedRows(),
       catalog: { status: this.catalogStatus, groups: this.mergedGroups(rows), partial: this.catalogPartial },
       /** provider 未注册的行（catalog 就绪才计算）。 */
       routeGaps: this.routeGapsOf(this.drafts !== undefined ? this.draftRows() : rows),
