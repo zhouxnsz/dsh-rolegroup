@@ -7,7 +7,6 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
-import { parseJsonc } from '../lib/jsonc.js'
 import { createPruneScheduler } from '../lib/startup-scheduler.js'
 import { auditRoles, editDistance, normalizeReport, readStartupReport, renderDoctorText, startupReportPath } from '../lib/doctor.js'
 import { CONFIG_AGE_HINT_DAYS } from '../lib/doctor.js'
@@ -32,9 +31,7 @@ import {
   presetDisplayName,
   presetIdOf,
 } from '../lib/presets.js'
-import { CONFIG_ROUTE_PATH, buildConfigInfo, installConfigInfoRoute } from '../lib/config-info.js'
-import { buildInitPlan, buildInitPlanFromBuiltins, rolegroupFilePath, writeInitConfig } from '../lib/init.js'
-import { configFileAddress, openConfigFileInSidebar } from '../src/client/config-file.js'
+import { renderBindingsExport } from '../lib/init.js'
 import { NAV_ICON_CSS, installSettingsNavIcon, markSettingsNavButton } from '../src/client/settings-nav-icon.js'
 
 // 客户端 controller 的预填 / 「配置文件」按钮会 fetch 宿主接口；单测统一走内存桩，绝不打真实网络。
@@ -52,19 +49,7 @@ function ok(label, fn) {
 }
 
 // --- jsonc ---
-ok('jsonc: 行注释 + 块注释 + 尾逗号', () => {
-  const parsed = parseJsonc(`{
-    // 行注释
-    "a": 1, /* 块注释 */
-    "b": "含 // 与 /* 的字符串",
-    "c": [1, 2,],
-  }`)
-  assert.deepEqual(parsed, { a: 1, b: '含 // 与 /* 的字符串', c: [1, 2] })
-})
 
-ok('jsonc: 非法输入抛错', () => {
-  assert.throws(() => parseJsonc('{ bad'), SyntaxError)
-})
 
 // --- mergeRoles ---
 ok('mergeRoles: 无配置 → 内置角色表（数量派生自 DEFAULT_ROLES）', () => {
@@ -229,8 +214,8 @@ ok('roles: vision 角色 —— 绑定 qwen3.8-flash、备用链只含视觉已�
   assert.ok(vision, '内置表必须含 vision 角色')
   assert.equal(vision.provider, 'qwen-token-plan-cn')
   assert.equal(vision.model, 'qwen3.8-flash', '选型依据：omo 长期实践 + scout-02 10/10')
-  assert.deepEqual(vision.fallbackModels, ['deepseek-official/deepseek-flash'],
-    '备用链只放 deepseek-official（唯一保证注册）且视觉已验证的 flash')
+  assert.deepEqual(vision.fallbackModels, ['deepseek-account/deepseek-flash', 'deepseek-official/deepseek-flash'],
+    '备用链只放 dsh 自带的两个 DeepSeek provider（账号优先），且只放视觉已验证的 flash')
   assert.ok(!JSON.stringify(vision).toLowerCase().includes('minimax'),
     'MiniMax-M3 在 OCR 探针 4/10 且编造内容，绝不可进 vision 的链')
   assert.ok(!JSON.stringify(vision.fallbackModels).includes('v4-pro'),
@@ -626,108 +611,51 @@ ok('command: parseRolegroupCommand 子命令解析，不做前缀模糊匹配（
   assert.deepEqual(parseRolegroupCommand('--help'), { kind: 'usage' })
   assert.deepEqual(parseRolegroupCommand('-h'), { kind: 'usage' })
   assert.deepEqual(parseRolegroupCommand('help'), { kind: 'usage' })
-  assert.deepEqual(parseRolegroupCommand('init'), { kind: 'init', write: false, force: false, project: false, diff: false })
-  assert.deepEqual(parseRolegroupCommand(' init --write '), { kind: 'init', write: true, force: false, project: false, diff: false })
-  assert.deepEqual(parseRolegroupCommand('init --write --force'), { kind: 'init', write: true, force: true, project: false, diff: false })
-  assert.deepEqual(parseRolegroupCommand('init --force'), { kind: 'init', write: false, force: true, project: false, diff: false })
-  assert.deepEqual(parseRolegroupCommand('init --write --project'), { kind: 'init', write: true, force: false, project: true, diff: false })
-  assert.deepEqual(parseRolegroupCommand('init --diff --write'), { kind: 'init', write: true, force: false, project: false, diff: true })
-  assert.deepEqual(parseRolegroupCommand('init --bogus'), { kind: 'unknown', sub: 'init --bogus' })
+  assert.deepEqual(parseRolegroupCommand('init'), { kind: 'init' })
+  assert.deepEqual(parseRolegroupCommand(' init '), { kind: 'init' })
+  // 自 v0.11 起 init 只是导出器：旧标志一律视为未知子命令（不许静默忽略）
+  assert.deepEqual(parseRolegroupCommand('init --write'), { kind: 'unknown', sub: 'init --write' })
+  assert.deepEqual(parseRolegroupCommand('init --force'), { kind: 'unknown', sub: 'init --force' })
 })
 
 // --- /rolegroup init：按本机可用路由生成起始配置（layer 2）---
-ok('init: buildInitPlan —— 主路由全可用时不需要文件；不可用时只覆盖那几条并保留剩余链', () => {
-  const { roles } = mergeRoles(undefined)
-  const allProviders = [...new Set(roles.map((r) => r.provider))]
-  const allModels = (p) => roles.filter((r) => r.provider === p).map((r) => r.model)
-  // ① 全部可用 → 不生成
-  let plan = buildInitPlan({ roles, providers: allProviders, modelsOf: allModels })
-  assert.equal(plan.needsFile, false)
-  assert.deepEqual(plan.entries, [])
-  assert.equal(parseJsonc(plan.text).roles !== undefined, true, '即使无覆盖项也必须是一份合法 JSONC')
-
-  // ② 只有 deepseek → 5 条覆盖，且写的是解析后的路由 + 剩余链
-  plan = buildInitPlanFromBuiltins({ providers: ['deepseek-official'], modelsOf: () => ['deepseek-flash', 'deepseek-v4-pro'] })
-  assert.equal(plan.needsFile, true)
-  assert.deepEqual(plan.entries.map((e) => e.toolName), ['analyst', 'planner', 'coder', 'reviewer', 'scribe', 'vision'])
-  const analyst = plan.entries[0]
-  assert.equal(analyst.provider, 'deepseek-official')
-  assert.equal(analyst.model, 'deepseek-flash', '内置链便宜档优先：缺 qwen 时先降级到 flash')
-  assert.deepEqual(analyst.fallbackModels, ['deepseek-official/deepseek-v4-pro'], '只保留选中档位之后的链')
-  assert.equal(analyst.primary, 'qwen-token-plan-cn/qwen3.8-max')
-  assert.ok(plan.text.includes('主路由 qwen-token-plan-cn/qwen3.8-max 在本机不可用'), '正文必须解释为什么被覆盖')
-
-  // ③ 生成的文本必须能直接喂回 mergeRoles，且这些角色变成显式（strict）
-  const merged = mergeRoles(parseJsonc(plan.text))
-  assert.deepEqual(merged.problems, [])
-  const strictNames = merged.roles.filter((r) => r.strict).map((r) => r.toolName)
-  assert.deepEqual(strictNames, ['analyst', 'planner', 'coder', 'reviewer', 'scribe', 'vision'])
-  assert.equal(merged.roles.find((r) => r.toolName === 'analyst').provider, 'deepseek-official')
-
-  // ④ 完全没有可用路由 → 不写条目，只留注释（写空 provider 会让 mergeRoles 跳过整条）
-  plan = buildInitPlan({
-    roles: [{ toolName: 'analyst', provider: 'ghost', model: 'x', fallbackModels: ['ghost2/y'] }],
-    providers: ['deepseek-official'],
-    modelsOf: () => ['deepseek-flash'],
-  })
-  assert.deepEqual(plan.entries, [])
-  assert.equal(plan.unresolved.length, 1)
-  assert.ok(plan.text.includes('⚠️ analyst：没有可用路由'), plan.text)
-  assert.deepEqual(parseJsonc(plan.text).roles, {}, '无条目时 roles 必须是空对象')
+ok('init: 导出当前生效绑定为 JSONC 文本（不再落盘/不再作为配置来源）（v0.11/AC-1）', () => {
+  const text = renderBindingsExport({ generatedAt: '2026-11-13' })
+  assert.ok(text.includes('"roles"'), text)
+  assert.ok(text.includes('生成时间：2026-11-13'), text)
+  assert.ok(text.includes('不再作为配置来源'), '导出文本必须说明它只是参考')
+  // 8 个内置角色全在，且每行带 provider/model
+  for (const name of Object.keys(DEFAULT_ROLES)) assert.ok(text.includes(`"${name}"`), `导出必须包含 ${name}`)
+  // 合法性：去掉注释后是合法 JSON
+  const stripped = text.split('\n').filter((line) => !line.trim().startsWith('//')).join('\n')
+  const parsed = JSON.parse(stripped)
+  assert.deepEqual(Object.keys(parsed.roles).sort(), Object.keys(DEFAULT_ROLES).sort())
+  // 不再提供落盘函数
+  assert.equal(typeof renderBindingsExport, 'function')
 })
 
-ok('init: rolegroupFilePath 与 writeInitConfig —— DSH_HOME 覆盖、默认不覆盖已有文件、--force 才覆盖', async () => {
-  assert.equal(rolegroupFilePath({ DSH_HOME: '/tmp/x' }, '/home/u'), '/tmp/x/rolegroup.jsonc')
-  assert.equal(rolegroupFilePath({}, '/home/u'), '/home/u/.dsh/rolegroup.jsonc')
-  assert.equal(rolegroupFilePath({ DSH_HOME: '~/custom' }, '/home/u'), '/home/u/custom/rolegroup.jsonc')
-
+await okAsync('command: /rolegroup init 只导出绑定文本、不写任何文件（v0.11/AC-2）', async () => {
   const tmp = await mkdtemp(join(tmpdir(), 'dsh-rg-init-'))
-  const path = join(tmp, 'rolegroup.jsonc')
-  const first = await writeInitConfig(path, '{ "roles": {} }\n')
-  assert.equal(first.written, true)
-  const second = await writeInitConfig(path, '{ "roles": { "x": {} } }\n')
-  assert.deepEqual(second, { written: false, reason: 'exists' })
-  assert.equal(readFileSync(path, 'utf8'), '{ "roles": {} }\n', '默认不得覆盖用户已有配置')
-  const forced = await writeInitConfig(path, '{ "roles": { "x": {} } }\n', { force: true })
-  assert.equal(forced.written, true)
-  assert.ok(readFileSync(path, 'utf8').includes('"x"'))
-})
-
-await okAsync('init: 命令端到端 —— 打印不落盘 / --write 落盘 / 已存在拒绝 / --force 覆盖', async () => {
-  const tmp = await mkdtemp(join(tmpdir(), 'dsh-rg-init-cmd-'))
   const prevHome = process.env.DSH_HOME
   process.env.DSH_HOME = tmp
   try {
     let captured
-    const fakeCommands = { list: () => [], register: (def) => { captured = def; return () => {} } }
+    const fakeCommands = { list: () => [], register: (definition) => { captured = definition; return () => {} } }
     const llm = {
       listProviders: () => [{ id: 'deepseek-official' }],
       listModels: async () => [{ id: 'deepseek-flash' }, { id: 'deepseek-v4-pro' }],
     }
     const fakeCtx = { get: (n) => (n === 'commands' ? fakeCommands : n === 'llm' ? llm : undefined), effect: (fn) => fn(), logger: { warn: () => {} } }
     installRolegroupCommands(fakeCtx)
-    const path = join(tmp, 'rolegroup.jsonc')
 
     const printed = await captured.handler({ rawInput: 'init' })
     assert.equal(printed.kind, 'success', printed.text)
-    assert.ok(printed.text.includes('deepseek-official/deepseek-v4-pro'), printed.text)
-    assert.ok(!existsSync(path), '不带 --write 不得落盘')
+    assert.ok(printed.text.includes('"analyst"'), '导出必须含角色')
+    assert.ok(printed.text.includes('不再作为配置来源'), '导出文本必须说明它只是参考')
+    assert.equal(existsSync(join(tmp, 'rolegroup.jsonc')), false, 'init 不得写任何配置文件')
 
-    const written = await captured.handler({ rawInput: 'init --write' })
-    assert.equal(written.kind, 'success', written.text)
-    assert.ok(existsSync(path), '--write 必须落盘')
-    assert.ok(readFileSync(path, 'utf8').includes('"analyst"'))
-
-    const again = await captured.handler({ rawInput: 'init --write' })
-    assert.equal(again.kind, 'error')
-    assert.ok(again.text.includes('已存在'), again.text)
-
-    const forced = await captured.handler({ rawInput: 'init --write --force' })
-    assert.equal(forced.kind, 'success', forced.text)
-
-    const unknown = await captured.handler({ rawInput: 'init --bogus' })
-    assert.equal(unknown.kind, 'error')
-    assert.ok(unknown.text.includes('未知子命令'), unknown.text)
+    const unknown = await captured.handler({ rawInput: 'init --write' })
+    assert.equal(unknown.kind, 'error', '旧的 --write 必须报未知，不许静默忽略')
   } finally {
     if (prevHome === undefined) delete process.env.DSH_HOME
     else process.env.DSH_HOME = prevHome
@@ -1362,55 +1290,6 @@ await okAsync('apply W3：终验路由校验抛错仍写报告（registered 全�
 
 // --- apply() 快照加性字段 configMtimeMs（plans/startup-hardening.md T3，AC-31）---
 
-await okAsync('apply 快照 configMtimeMs：utimes 钉死 mtime → 原样入快照；无配置文件 → null（AC-31）', async () => {
-  // URL '..' 解析结果带尾部斜杠，cwd 补一个斜杠后逐字比对（不新增 import）
-  assert.equal(`${process.cwd()}/`, fileURLToPath(new URL('..', import.meta.url)), '用例开始时 cwd 必须为仓库根（chdir 隔离的前提）')
-  // 与 AC-30 同款注入（T5）：apply(ctx, { debounceMs: 1, maxWaitMs: 5 }) + 轮询落盘，无真实等待。
-  // 与 AC-30 同款桩 loader（bare import 必失败已实证）；注意 resolveToolSubagent 的模块级
-  // 缓存此时已被 AC-30 置为桩模块，本用例的 loader 实际不会被再调用——结论只依赖本次
-  // 快照字段（configMtimeMs/configSource），与注册是否走缓存无关，故串扰无害。
-  const loaderStub = makeContractLoader() // v0.6：需能解析 persona 模块 + 默认 preset 声明
-  const prevHome = process.env.DSH_HOME
-  const prevCwd = process.cwd()
-  try {
-    // 场景一：DSH_HOME 放一份 rolegroup.jsonc 并用 utimes 钉死 mtime（整秒值，规避
-    // 文件系统亚秒精度截断，不依赖真实当前时间）
-    const tmpCwd = await mkdtemp(join(tmpdir(), 'dsh-rg-mtime-cwd-'))
-    const tmpHome = await mkdtemp(join(tmpdir(), 'dsh-rg-mtime-home-'))
-    const configFile = join(tmpHome, 'rolegroup.jsonc')
-    await writeFile(configFile, '{ "roles": {} }')
-    const pinned = new Date('2026-09-01T00:00:00.000Z')
-    await utimes(configFile, pinned, pinned)
-    process.env.DSH_HOME = tmpHome
-    process.chdir(tmpCwd) // 隔离项目级候选 <cwd>/.dsh/rolegroup.jsonc（防仓库根未来误命中）
-    const fake1 = makeFakeCtx({ services: { loader: loaderStub } })
-    await apply(fake1.ctx, { debounceMs: 1, maxWaitMs: 5 })
-    const report1 = await waitForReport(join(tmpHome, 'plugins', 'dsh-rolegroup', 'last-startup.json'))
-    assert.equal(report1.configMtimeMs, pinned.getTime(), 'configMtimeMs 必须等于 utimes 钉死的毫秒值')
-    assert.equal(report1.configSource, configFile)
-    // 回归断言：同一快照中既有字段形状不变（H13）
-    assert.ok(typeof report1.time === 'string', 'time 仍为 ISO 字符串')
-    assert.ok(Array.isArray(report1.registered) && Array.isArray(report1.failed), 'registered/failed 仍为数组')
-    assert.ok(Array.isArray(report1.invalid) && Array.isArray(report1.problems), 'invalid/problems 仍为数组')
-    console.log(`    场景一 last-startup.json 关键内容: ${JSON.stringify({ time: report1.time, configSource: report1.configSource, configMtimeMs: report1.configMtimeMs, registered: report1.registered.length, failed: report1.failed, invalid: report1.invalid, problems: report1.problems })}`)
-
-    // 场景二：无任何配置文件 → configMtimeMs === null
-    const emptyCwd = await mkdtemp(join(tmpdir(), 'dsh-rg-nocfg-cwd-'))
-    const emptyHome = await mkdtemp(join(tmpdir(), 'dsh-rg-nocfg-home-'))
-    process.env.DSH_HOME = emptyHome
-    process.chdir(emptyCwd)
-    const fake2 = makeFakeCtx({ services: { loader: loaderStub } })
-    await apply(fake2.ctx, { debounceMs: 1, maxWaitMs: 5 })
-    const report2 = await waitForReport(join(emptyHome, 'plugins', 'dsh-rolegroup', 'last-startup.json'))
-    assert.equal(report2.configMtimeMs, null, '无任何配置文件时 configMtimeMs 必须为 null')
-    assert.equal(report2.configSource, null)
-    console.log(`    场景二 last-startup.json 关键内容: ${JSON.stringify({ time: report2.time, configSource: report2.configSource, configMtimeMs: report2.configMtimeMs })}`)
-  } finally {
-    process.chdir(prevCwd) // 必须恢复 cwd（RK2：泄漏会影响同进程后续用例）
-    if (prevHome === undefined) delete process.env.DSH_HOME
-    else process.env.DSH_HOME = prevHome
-  }
-})
 
 // --- doctor: 配置年龄提示（plans/startup-hardening.md T4，AC-32 / AC-33）---
 // 口径：提示走 state.anomalies 通道（⚠️ 提示级，与 AC-22/AC-24 同口径），绝不进 reportIssues、
@@ -1967,52 +1846,6 @@ await okAsync('compose 重构等价性：启动快照字段形状与 registered 
   }
 })
 
-await okAsync('compose D4 接管判据 + configSource 三态：未接管→jsonc / 接管→settings / 无文件→null（v0.4/AC-14、AC-15）', async () => {
-  const prevHome = process.env.DSH_HOME
-  const makeHome = async (withJsonc = true) => {
-    const dir = await mkdtemp(join(tmpdir(), 'dsh-rg-t2-tristate-'))
-    // 用户级 jsonc 覆盖：把 coder 的 model 改成 k3-jsonc，用来区分「走 jsonc」与「走内置表」
-    if (withJsonc) await writeFile(join(dir, 'rolegroup.jsonc'), JSON.stringify({ roles: { coder: { model: 'k3-jsonc' } } }))
-    return dir
-  }
-  try {
-    // ① enabled 缺省 → 未接管 → 文件表生效（coder.model === k3-jsonc）；configSource = jsonc 路径
-    const homeA = await makeHome()
-    process.env.DSH_HOME = homeA
-    const untouched = makeComposeCtx()
-    await apply(untouched.ctx, { debounceMs: 1, maxWaitMs: 5 }) // 无 roles 键 → 照旧走「注入项」分支
-    assert.equal(untouched.calls.plugin.find((c) => c.toolName === 'coder').agentOptions.model, 'k3-jsonc',
-      '未接管时必须走 jsonc 覆盖')
-    const untouchedReport = await waitForReport(reportPathOf(homeA))
-    assert.ok(untouchedReport.configSource.includes('rolegroup.jsonc'), untouchedReport.configSource)
-
-    // ② enabled=true + 显式空表 → 面板已接管 → 忽略 jsonc，回落**内置表**（coder.model === DEFAULT_ROLES.coder.model）
-    //    注意：不是「零角色」——mergeRoles 恒以内置表为底（v0.1 既有语义），空表 = 无覆盖。
-    const homeB = await makeHome()
-    process.env.DSH_HOME = homeB
-    const takeover = makeComposeCtx()
-    __setTestOverrides({ debounceMs: 1, maxWaitMs: 5 })
-    await apply(takeover.ctx, makeEntryConfig([], true).config)
-    const takeoverCoder = takeover.calls.plugin.find((c) => c.toolName === 'coder')
-    assert.equal(takeoverCoder.agentOptions.model, DEFAULT_ROLES.coder.model,
-      '接管后空表 = 无覆盖 → 内置表（不得回落 jsonc）')
-    const takeoverReport = await waitForReport(reportPathOf(homeB))
-    assert.ok(takeoverReport.configSource.includes('settings'), takeoverReport.configSource)
-
-    // ③ enabled 缺省 + 无任何 jsonc → 未接管且文件缺失 → configSource = null（= 内置默认表）
-    const homeC = await makeHome(false)
-    process.env.DSH_HOME = homeC
-    const builtinOnly = makeComposeCtx()
-    await apply(builtinOnly.ctx, { debounceMs: 1, maxWaitMs: 5 })
-    const builtinReport = await waitForReport(reportPathOf(homeC))
-    assert.equal(builtinReport.configSource, null, '既未接管也无文件 → configSource 必须是 null（三态之三）')
-    console.log(`    configSource 三态：${untouchedReport.configSource} ｜ ${takeoverReport.configSource} ｜ ${builtinReport.configSource}`)
-  } finally {
-    __setTestOverrides(undefined)
-    if (prevHome === undefined) delete process.env.DSH_HOME
-    else process.env.DSH_HOME = prevHome
-  }
-})
 
 await okAsync('compose settings **启动**接管路径：残留 readonly 必须给出迁移提示（收口审查 B-1 回归）', async () => {
   const tmp = await mkdtemp(join(tmpdir(), 'dsh-rg-t2-legacy-'))
@@ -2243,82 +2076,7 @@ await okAsync('compose recompose 的角色校验：新表中未注册 provider �
 //   ② 快照的 configMtimeMs 原先恒取 jsonc 文件 mtime，接管时也一样 → doctor 的「配置年龄提示」
 //      会把一个已被让位的文件的年龄算到 settings 面板头上。现按「生效来源就是该文件」把关。
 
-await okAsync('层语义可见性：接管时日志须点名被让位的 jsonc 与后果（"以为 jsonc 还在生效" 回归锁）', async () => {
-  const tmp = await mkdtemp(join(tmpdir(), 'dsh-rg-layer-msg-'))
-  const prevHome = process.env.DSH_HOME
-  process.env.DSH_HOME = tmp
-  __setTestOverrides({ debounceMs: 1, maxWaitMs: 5 })
-  try {
-    const configFile = join(tmp, 'rolegroup.jsonc')
-    await writeFile(configFile, JSON.stringify({ roles: { coder: { model: 'k3-jsonc' } } }))
-    const fake = makeComposeCtx()
-    await apply(fake.ctx, makeEntryConfig([
-      { toolName: 'scout', provider: 'deepseek-official', model: 'deepseek-flash' },
-    ], true).config)
-    // ① 行为判据：jsonc 的 coder 覆盖**不生效**（整层让位 → 回落内置 k3）
-    assert.equal(fake.calls.plugin.find((c) => c.toolName === 'coder').agentOptions.model, DEFAULT_ROLES.coder.model,
-      '接管后 jsonc 整层让位：未列进面板的 coder 必须回落内置表')
-    // ② 可见性判据：日志必须说全后果（只说"被覆盖"会让用户以为 jsonc 覆盖还在生效）
-    const line = fake.logs.info.find((m) => m.includes('整层让位'))
-    assert.ok(line, `必须有一条说明 jsonc 整层让位的 info 日志，实为：${JSON.stringify(fake.logs.info)}`)
-    assert.ok(line.includes(configFile), `日志须点名被让位的文件路径：${line}`)
-    assert.ok(line.includes('回落内置表'), `日志须点明未列出角色的去处：${line}`)
-    // ③ 隔离判据：必须等自己的终验落盘再走——否则 1ms 防抖的剪枝会拖到下一个用例
-    //    切了 DSH_HOME 之后才写报告，把别人的临时目录写脏（跨用例竞态，曾真实发生）。
-    await readReportWhen(tmp, (r) => typeof r.configSource === 'string' && r.configSource.includes('settings'))
-  } finally {
-    __setTestOverrides(undefined)
-    if (prevHome === undefined) delete process.env.DSH_HOME
-    else process.env.DSH_HOME = prevHome
-  }
-})
 
-await okAsync('configMtimeMs 归因：生效来源是 jsonc → 透出 mtime（年龄提示照出）；面板接管 → null（提示不出现）', async () => {
-  const tmp = await mkdtemp(join(tmpdir(), 'dsh-rg-mtime-src-'))
-  const prevHome = process.env.DSH_HOME
-  process.env.DSH_HOME = tmp
-  const DAY = 24 * 60 * 60 * 1000
-  const pinned = new Date('2026-01-05T00:00:00.000Z') // 远超 14 天阈值：若被透出必触发年龄提示
-  __setTestOverrides({ debounceMs: 1, maxWaitMs: 5 })
-  try {
-    const configFile = join(tmp, 'rolegroup.jsonc')
-    await writeFile(configFile, JSON.stringify({ roles: { coder: { model: 'k3-jsonc' } } }))
-    await utimes(configFile, pinned, pinned)
-
-    // ① 未接管（enabled=false）→ 生效来源就是该文件 → mtime 原样入快照，doctor 出 ⚠️ 年龄提示
-    // 超时参数只作「防挂死兜底」，不是固定等待：机器满载时 2000ms 曾偶发超时（2026-10-20 实测），故放宽。
-    const a = makeComposeCtx()
-    await apply(a.ctx, makeEntryConfig([], false).config)
-    const reportA = await waitForReport(reportPathOf(tmp), 8000)
-    assert.equal(reportA.configSource, configFile)
-    assert.equal(reportA.configMtimeMs, pinned.getTime(), '生效来源是 jsonc 时必须透出该文件 mtime')
-    const stateA = await readStartupReport({ env: { DSH_HOME: tmp }, now: new Date(pinned.getTime() + 30 * DAY) })
-    assert.equal(stateA.kind, 'ok')
-    assert.equal(stateA.anomalies.length, 1, JSON.stringify(stateA.anomalies))
-    assert.ok(stateA.anomalies[0].includes('30 天') && stateA.anomalies[0].includes(configFile),
-      `年龄提示须同源（source 与日期都来自该文件）：${stateA.anomalies[0]}`)
-
-    // ② 接管（enabled=true）→ jsonc 整层让位 → mtime 必须为 null，且年龄提示不得出现
-    const b = makeComposeCtx()
-    await apply(b.ctx, makeEntryConfig([], true).config)
-    // 同 ①：8000ms 只是防挂死兜底（readReportWhen 的缺省 2000ms 在满载时会偶发超时）
-    await waitForCond(() => {
-      try {
-        return JSON.parse(readFileSync(reportPathOf(tmp), 'utf8')).configSource?.includes?.('settings') === true
-      } catch { return false }
-    }, 'last-startup.json 标记 settings 来源', 8000)
-    const reportB = JSON.parse(readFileSync(reportPathOf(tmp), 'utf8'))
-    assert.ok(reportB.configSource.includes('settings'), reportB.configSource)
-    assert.equal(reportB.configMtimeMs, null, '接管后生效来源不是 jsonc 文件 → configMtimeMs 必须为 null')
-    const stateB = await readStartupReport({ env: { DSH_HOME: tmp }, now: new Date(pinned.getTime() + 30 * DAY) })
-    assert.deepEqual(stateB.anomalies, [],
-      `接管后不得出现「配置超龄」⚠️（不许把被让位文件的年龄算到面板头上）：${JSON.stringify(stateB.anomalies)}`)
-  } finally {
-    __setTestOverrides(undefined)
-    if (prevHome === undefined) delete process.env.DSH_HOME
-    else process.env.DSH_HOME = prevHome
-  }
-})
 
 // --- v0.6 T4：契约自检（dsh ≥0.2.1）——缺 agentPresets 服务必须 fail-loud 但不抛 ---
 await okAsync('v0.6 契约自检：无 agentPresets 服务 → warn + 角色全 failed + 报告仍写出（v0.6/A12/A17）', async () => {
@@ -2568,96 +2326,7 @@ await okAsync('v0.6 审计一致性：preset broken → 移出 registered/公告
   }
 })
 
-await okAsync('init: 层感知 —— 面板接管/项目文件存在时拒绝 --write；--project 写项目级并警告遮蔽（v0.6.3）', async () => {
-  const tmp = await mkdtemp(join(tmpdir(), 'dsh-rg-init-layer-'))
-  const prevHome = process.env.DSH_HOME
-  process.env.DSH_HOME = tmp
-  try {
-    const llm = {
-      listProviders: () => [{ id: 'deepseek-official' }],
-      listModels: async () => [{ id: 'deepseek-flash' }, { id: 'deepseek-v4-pro' }],
-    }
-    const makeHandler = (describeLayer) => {
-      let captured
-      const fakeCommands = { list: () => [], register: (def) => { captured = def; return () => {} } }
-      const fakeCtx = { get: (n) => (n === 'commands' ? fakeCommands : n === 'llm' ? llm : undefined), effect: (fn) => fn(), logger: { warn: () => {} } }
-      installRolegroupCommands(fakeCtx, { describeLayer })
-      return captured.handler
-    }
-    const userPath = join(tmp, 'rolegroup.jsonc')
-    const projectPath = join(tmp, 'proj', '.dsh', 'rolegroup.jsonc')
 
-    // ① 面板接管 → 拒绝，且不落盘
-    let handler = makeHandler(() => ({ panelEnabled: true, active: 'panel', userPath, projectPath }))
-    let res = await handler({ rawInput: 'init --write' })
-    assert.equal(res.kind, 'error', res.text)
-    assert.ok(res.text.includes('面板已接管'), res.text)
-    assert.ok(res.text.includes('重置为文件配置'), '必须给出退出接管的可执行路径')
-    assert.ok(!existsSync(userPath), '被拒绝时不得写文件')
-
-    // ② 项目级配置生效 → 用户级写入拒绝
-    handler = makeHandler(() => ({ panelEnabled: false, active: 'project', path: projectPath, userPath, projectPath }))
-    res = await handler({ rawInput: 'init --write' })
-    assert.equal(res.kind, 'error')
-    assert.ok(res.text.includes('项目级配置存在'), res.text)
-    assert.ok(res.text.includes('--project'), '必须提示改用 --project')
-
-    // ③ --project 可以写；若当前生效是用户级，要警告遮蔽
-    res = await handler({ rawInput: 'init --write --project' })
-    assert.equal(res.kind, 'success', res.text)
-    assert.ok(existsSync(projectPath), '项目级文件必须落在 .dsh/rolegroup.jsonc')
-    assert.equal(res.text.includes('遮蔽'), false, '当前生效层是项目级时不该提示遮蔽')
-    handler = makeHandler(() => ({ panelEnabled: false, active: 'user', path: userPath, userPath, projectPath }))
-    res = await handler({ rawInput: 'init --write --project --force' })
-    assert.ok(res.text.includes('遮蔽'), '写项目级遮蔽用户级时必须警告')
-
-    // ④ 打印模式永远显示当前生效层
-    handler = makeHandler(() => ({ panelEnabled: false, active: 'builtin', userPath, projectPath }))
-    res = await handler({ rawInput: 'init' })
-    assert.equal(res.kind, 'success')
-    assert.ok(res.text.includes('当前生效层：内置默认表'), res.text)
-  } finally {
-    if (prevHome === undefined) delete process.env.DSH_HOME
-    else process.env.DSH_HOME = prevHome
-  }
-})
-
-await okAsync('init: --force 覆盖前备份；--diff 报出会被覆盖/丢弃的角色（v0.6.3）', async () => {
-  const tmp = await mkdtemp(join(tmpdir(), 'dsh-rg-init-bak-'))
-  const prevHome = process.env.DSH_HOME
-  process.env.DSH_HOME = tmp
-  try {
-    const llm = {
-      listProviders: () => [{ id: 'deepseek-official' }],
-      listModels: async () => [{ id: 'deepseek-flash' }, { id: 'deepseek-v4-pro' }],
-    }
-    let captured
-    const fakeCommands = { list: () => [], register: (def) => { captured = def; return () => {} } }
-    const fakeCtx = { get: (n) => (n === 'commands' ? fakeCommands : n === 'llm' ? llm : undefined), effect: (fn) => fn(), logger: { warn: () => {} } }
-    const userPath = join(tmp, 'rolegroup.jsonc')
-    installRolegroupCommands(fakeCtx, { describeLayer: () => ({ panelEnabled: false, active: 'user', path: userPath, userPath }) })
-
-    // 预置一份用户配置：analyst 会被覆盖，my_role 会被丢弃
-    await writeFile(userPath, '{ "roles": { "analyst": { "model": "old" }, "my_role": { "model": "keep" } } }\n', 'utf8')
-
-    const diffed = await captured.handler({ rawInput: 'init --diff' })
-    assert.equal(diffed.kind, 'success', diffed.text)
-    assert.ok(diffed.text.includes('会被覆盖：analyst'), diffed.text)
-    assert.ok(diffed.text.includes('会被丢弃'), diffed.text)
-    assert.ok(diffed.text.includes('my_role'), diffed.text)
-
-    const overwritten = await captured.handler({ rawInput: 'init --write --force' })
-    assert.equal(overwritten.kind, 'success', overwritten.text)
-    assert.ok(overwritten.text.includes('已备份原文件'), overwritten.text)
-    const backups = readdirSync(tmp).filter((name) => name.startsWith('rolegroup.jsonc.bak-'))
-    assert.equal(backups.length, 1, `必须留下恰好一份备份：${backups}`)
-    const backupText = readFileSync(join(tmp, backups[0]), 'utf8')
-    assert.ok(backupText.includes('my_role'), '备份必须是覆盖前的原文')
-  } finally {
-    if (prevHome === undefined) delete process.env.DSH_HOME
-    else process.env.DSH_HOME = prevHome
-  }
-})
 
 // --- 模型链：内置备用档 + 启动期解析（决策 1：显式配置不自动降级）---
 ok('roles: parseRouteRef 只认 "provider/model"，首个斜杠切分', () => {
@@ -2694,13 +2363,35 @@ ok('roles: resolveRoleRoute —— 主路由可用不降级 / provider 缺失沿
   assert.equal(out.degraded, false)
 })
 
+ok('roles: 只有账号登录（没有 API Key）时也能沿链降级到 deepseek-account（v0.11/AC-5）', () => {
+  const { roles } = mergeRoles(undefined)
+  const analyst = roles.find((r) => r.toolName === 'analyst')
+  // 机器上只注册了 deepseek-account（登录态），没有 deepseek-official（API Key）
+  const resolved = resolveRoleRoute(analyst, {
+    providers: new Set(['deepseek-account']),
+    modelsOf: (provider) => (provider === 'deepseek-account' ? ['deepseek-flash', 'deepseek-v4-pro'] : undefined),
+  })
+  assert.equal(resolved.ok, true, '账号 provider 必须能接住内置角色的降级')
+  assert.equal(resolved.degraded, true)
+  assert.equal(resolved.role.provider, 'deepseek-account')
+  assert.equal(resolved.role.model, 'deepseek-flash', '链首是账号的 flash')
+  // 完全不认识的 provider → 仍然 fail-loud
+  const dead = resolveRoleRoute(analyst, { providers: new Set(['other']), modelsOf: () => undefined })
+  assert.equal(dead.ok, false, '链上没有任何可用 provider 时必须失败（不许假装成功）')
+})
+
 ok('roles: 内置表提供跨 provider 备用链；用户覆盖但未写链则不继承（决策 1）', () => {
   const { roles } = mergeRoles(undefined)
   for (const role of roles) {
     if (role.provider === 'deepseek-official') continue
     assert.ok(Array.isArray(role.fallbackModels) && role.fallbackModels.length > 0, `${role.toolName} 必须带备用链`)
-    assert.ok(role.fallbackModels.every((ref) => parseRouteRef(ref)?.provider === 'deepseek-official'),
-      `${role.toolName} 的备用链必须兜到 dsh 保证注册的 deepseek-official：${role.fallbackModels}`)
+    // v0.11：dsh-base 自带两个 DeepSeek provider（账号登录 deepseek-account / API Key deepseek-official），
+    // 链只能指向它们——第三方网关/订阅不一定注册。顺序上账号优先（普通用户更可能是登录态）。
+    const deepseekProviders = new Set(['deepseek-account', 'deepseek-official'])
+    assert.ok(role.fallbackModels.every((ref) => deepseekProviders.has(parseRouteRef(ref)?.provider)),
+      `${role.toolName} 的备用链必须兜到 dsh 自带的 DeepSeek provider：${role.fallbackModels}`)
+    assert.equal(parseRouteRef(role.fallbackModels[0])?.provider, 'deepseek-account',
+      `${role.toolName} 的备用链应当账号优先（登录态更常见）：${role.fallbackModels}`)
   }
   const overridden = mergeRoles({ roles: { analyst: { persona: '自定义' } } }).roles.find((r) => r.toolName === 'analyst')
   assert.equal(overridden.strict, true)
@@ -2927,302 +2618,6 @@ await okAsync('build-client: node 侧模拟 __ModuleLoader__ 消费产物——f
 // 数据必须来自 host（jsonc 文件内容/路径只有 host 读得到）；浏览器侧只渲染快照。
 // 纯函数保证 node 可测；路由安装器在没有 webServer 的宿主上必须安静跳过（红线 1）。
 
-ok('config-info: 面板接管 → active=panel；文件仅展示不生效；来源逐角色标注 panel/builtin', () => {
-  const info = buildConfigInfo({
-    panelEnabled: true,
-    panelRoleNames: ['analyst'],
-    file: { path: '/tmp/rolegroup.jsonc', mtimeMs: 123, text: '{"roles":{}}', error: null },
-    fileRoleNames: ['analyst', 'coder'],
-    effectiveRoles: [
-      { toolName: 'analyst', provider: 'qwen-token-plan-cn', model: 'qwen3.8-max', persona: '分析人格', summary: '需求澄清', reasoningEffort: 'high' },
-      { toolName: 'coder', provider: 'kimi-coding', model: 'k3' },
-      { toolName: 'scout', provider: 'deepseek-official', model: 'deepseek-flash' },
-    ],
-    problems: [],
-  })
-  assert.equal(info.active, 'panel')
-  assert.equal(info.file.active, false, '面板接管时文件只是展示，不得标生效')
-  assert.equal(info.file.path, '/tmp/rolegroup.jsonc')
-  assert.equal(info.file.mtimeMs, 123)
-  assert.equal(info.file.text, '{"roles":{}}')
-  assert.deepEqual(info.effective.roles.map((role) => [role.toolName, role.from]), [
-    ['analyst', 'panel'], ['coder', 'builtin'], ['scout', 'builtin'],
-  ])
-  // 设置页预填需要可选字段（persona/summary/reasoningEffort），快照不得丢。
-  assert.equal(info.effective.roles[0].persona, '分析人格')
-  assert.equal(info.effective.roles[0].summary, '需求澄清')
-  assert.equal(info.effective.roles[0].reasoningEffort, 'high')
-})
-
-ok('config-info: 文件生效 → active=file；文件显式写的角色标 file，其余 builtin', () => {
-  const info = buildConfigInfo({
-    panelEnabled: false,
-    panelRoleNames: [],
-    file: { path: '/tmp/rolegroup.jsonc', mtimeMs: 456, text: '{}', error: null },
-    fileRoleNames: ['coder'],
-    effectiveRoles: [
-      { toolName: 'coder', provider: 'kimi-coding', model: 'k3' },
-      { toolName: 'analyst', provider: 'qwen-token-plan-cn', model: 'qwen3.8-max' },
-    ],
-    problems: ['示例问题'],
-  })
-  assert.equal(info.active, 'file')
-  assert.equal(info.file.active, true)
-  assert.deepEqual(info.effective.roles.map((role) => [role.toolName, role.from]), [
-    ['coder', 'file'], ['analyst', 'builtin'],
-  ])
-  assert.deepEqual(info.effective.problems, ['示例问题'])
-})
-
-ok('config-info: 无配置文件 → active=builtin、file=null、全部内置', () => {
-  const info = buildConfigInfo({
-    panelEnabled: false,
-    panelRoleNames: [],
-    file: null,
-    fileRoleNames: [],
-    effectiveRoles: [{ toolName: 'scout', provider: 'deepseek-official', model: 'deepseek-flash' }],
-    problems: [],
-  })
-  assert.equal(info.active, 'builtin')
-  assert.equal(info.file, null)
-  assert.deepEqual(info.effective.roles.map((role) => role.from), ['builtin'])
-})
-
-ok('config-info: 文件解析失败 → active=builtin；file.error 透出且不标生效；全部内置', () => {
-  const info = buildConfigInfo({
-    panelEnabled: false,
-    panelRoleNames: [],
-    file: { path: '/tmp/rolegroup.jsonc', mtimeMs: 789, text: '{ bad', error: 'Unexpected token' },
-    fileRoleNames: ['coder'],
-    effectiveRoles: [{ toolName: 'coder', provider: 'kimi-coding', model: 'k3' }],
-    problems: [],
-  })
-  assert.equal(info.active, 'builtin')
-  assert.equal(info.file.error, 'Unexpected token')
-  assert.equal(info.file.active, false, '解析失败的文件不能标生效')
-  assert.deepEqual(info.effective.roles.map((role) => role.from), ['builtin'])
-})
-
-function makeHttpExchange(method, remoteAddress) {
-  const request = { method, socket: { remoteAddress } }
-  const response = {
-    status: undefined,
-    headers: undefined,
-    body: undefined,
-    writeHead(status, headers) { this.status = status; this.headers = headers },
-    end(body) { this.body = body },
-  }
-  return { request, response }
-}
-
-await okAsync('config-info route: 只读 + 仅本机；GET/HEAD 200、非本机 403、非 GET/HEAD 405；无 webServer 安静跳过', async () => {
-  let route
-  const warns = []
-  const ctx = {
-    inject: (deps, cb) => {
-      assert.deepEqual(deps, ['webServer'], '只软取 webServer，不把它加进静态 inject（headless 必须能加载）')
-      cb({
-        webServer: { register: (registered) => { route = registered; return () => {} } },
-        effect: (fn) => fn(),
-      })
-    },
-  }
-  const log = { info() {}, warn: (message) => warns.push(message) }
-  assert.equal(installConfigInfoRoute(ctx, () => ({
-    active: 'builtin', file: null, effective: { roles: [], problems: [] },
-  }), log), true)
-  assert.ok(route, 'webServer.register 必须被调用')
-  assert.equal(route.kind, 'exact')
-  assert.equal(route.path, CONFIG_ROUTE_PATH)
-  assert.equal(CONFIG_ROUTE_PATH, '/api/dsh-rolegroup/config')
-
-  let exchange = makeHttpExchange('GET', '127.0.0.1')
-  await route.handler(exchange.request, exchange.response)
-  assert.equal(exchange.response.status, 200)
-  assert.equal(exchange.response.headers['cache-control'], 'no-store')
-  const payload = JSON.parse(exchange.response.body)
-  assert.equal(payload.ok, true)
-  assert.equal(payload.active, 'builtin')
-  assert.equal(typeof payload.generatedAt, 'string')
-  assert.deepEqual(payload.effective, { roles: [], problems: [] })
-
-  exchange = makeHttpExchange('HEAD', '::1')
-  await route.handler(exchange.request, exchange.response)
-  assert.equal(exchange.response.status, 200)
-  assert.equal(exchange.response.body, undefined, 'HEAD 不得写 body')
-
-  exchange = makeHttpExchange('GET', '10.0.0.5')
-  await route.handler(exchange.request, exchange.response)
-  assert.equal(exchange.response.status, 403, '非本机请求必须拒绝（绕过 /api 认证层，不向局域网暴露配置）')
-  assert.equal(JSON.parse(exchange.response.body).ok, false)
-
-  exchange = makeHttpExchange('POST', '127.0.0.1')
-  await route.handler(exchange.request, exchange.response)
-  assert.equal(exchange.response.status, 405)
-  assert.equal(exchange.response.headers.allow, 'GET, HEAD')
-
-  // 降级：ctx.inject 缺席 / webServer 缺席都不得抛，也不得注册
-  assert.equal(installConfigInfoRoute({}, () => ({}), log), false)
-  let callbackRan = false
-  installConfigInfoRoute({
-    inject: (deps, cb) => { callbackRan = true; cb({}) },
-  }, () => ({}), log)
-  assert.equal(callbackRan, true, 'webServer 缺席时回调必须执行且安全返回')
-  assert.deepEqual(warns, [], '缺少可选能力属于正常降级，不该 warn')
-})
-
-await okAsync('config-info route 加固：请求 URL/查询串不得影响快照（无任意文件读）+ nosniff（v0.7/AC-10）', async () => {
-  let route
-  const ctx = {
-    inject: (deps, cb) => cb({
-      webServer: { register: (registered) => { route = registered; return () => {} } },
-      effect: (fn) => fn(),
-    }),
-  }
-  const SNAPSHOT = {
-    active: 'file',
-    file: { path: '/home/u/.dsh/rolegroup.jsonc', mtimeMs: 1, text: '{ "roles": {} }', error: null, active: true },
-    effective: { roles: [{ toolName: 'coder', provider: 'kimi-coding', model: 'k3', from: 'file' }], problems: [] },
-  }
-  let buildCalls = 0
-  installConfigInfoRoute(ctx, () => { buildCalls += 1; return SNAPSHOT }, { info() {}, warn() {} })
-
-  // ① 基线调用
-  let clean = makeHttpExchange('GET', '127.0.0.1')
-  await route.handler(clean.request, clean.response)
-  assert.equal(clean.response.status, 200)
-  // generatedAt 是时间戳：跨毫秒必然不相等，比较时必须剔除（否则断言随调度抖动 flaky）
-  const stableOf = (body) => { const { generatedAt, ...rest } = JSON.parse(body); return rest }
-  const cleanPayload = stableOf(clean.response.body)
-
-  // ② 恶意/可疑查询串：handler 必须完全忽略（它从**内存快照**取数，不按请求读盘）
-  const malicious = [
-    '/api/dsh-rolegroup/config?path=/etc/passwd',
-    '/api/dsh-rolegroup/config?file=/etc/hosts',
-    '/api/dsh-rolegroup/config?cwd=/',
-    '/api/dsh-rolegroup/config?../../../../etc/shadow',
-  ]
-  for (const url of malicious) {
-    const exchange = makeHttpExchange('GET', '127.0.0.1')
-    exchange.request.url = url
-    await route.handler(exchange.request, exchange.response)
-    assert.equal(exchange.response.status, 200, url)
-    assert.deepEqual(stableOf(exchange.response.body), cleanPayload, `查询串不得改变快照内容：${url}`)
-  }
-  assert.equal(buildCalls, 1 + malicious.length, '每次请求恰好调用一次 buildInfo（不按参数分支读盘）')
-
-  // ③ 加固头：nosniff 防 MIME 嗅探（JSON 被当脚本解释的经典面）
-  assert.equal(clean.response.headers['x-content-type-options'], 'nosniff', '200 响应必须带 nosniff')
-  const rejected = makeHttpExchange('POST', '127.0.0.1')
-  await route.handler(rejected.request, rejected.response)
-  assert.equal(rejected.response.status, 405)
-  assert.equal(rejected.response.headers['x-content-type-options'], 'nosniff', '405 响应同样要带 nosniff')
-
-  // ④ 127.0.0.0/8 全段视为本机（不能只认 127.0.0.1）
-  const other = makeHttpExchange('GET', '127.0.0.2')
-  await route.handler(other.request, other.response)
-  assert.equal(other.response.status, 200, '127.0.0.0/8 都是回环')
-})
-
-await okAsync('config-info: apply 真的装上路由，快照按当前生效层返回（假 webServer 集成）', async () => {
-  const tmp = await mkdtemp(join(tmpdir(), 'dsh-rg-config-'))
-  const prevHome = process.env.DSH_HOME
-  process.env.DSH_HOME = tmp
-  let route
-  try {
-    __setTestOverrides({ debounceMs: 1, maxWaitMs: 5 })
-    const fake = makeComposeCtx({
-      injectImpl: (deps, cb) => {
-        // 只应答 webServer；agentPresets 已由 makeComposeCtx 默认就绪，commands 缺失走既有降级
-        if (deps.includes('webServer')) {
-          cb({
-            webServer: { register: (registered) => { route = registered; return () => {} } },
-            effect: (fn) => fn(),
-          })
-        }
-      },
-    })
-    await apply(fake.ctx, makeEntryConfig([], false).config)
-    assert.ok(route, 'apply 必须通过 ctx.inject([webServer]) 注册配置查看路由')
-    assert.equal(route.kind, 'exact')
-    assert.equal(route.path, CONFIG_ROUTE_PATH)
-    const exchange = makeHttpExchange('GET', '127.0.0.1')
-    await route.handler(exchange.request, exchange.response)
-    const payload = JSON.parse(exchange.response.body)
-    assert.equal(payload.ok, true)
-    assert.equal(payload.active, 'builtin', '无 jsonc + 面板未接管 → 内置表')
-    assert.equal(payload.file, null)
-    assert.equal(payload.effective.roles.length, BUILTIN_COUNT, '内置角色必须全部出现在生效表')
-    assert.ok(payload.effective.roles.every((role) => role.from === 'builtin'), JSON.stringify(payload.effective.roles))
-  } finally {
-    __setTestOverrides(undefined)
-    if (prevHome === undefined) delete process.env.DSH_HOME
-    else process.env.DSH_HOME = prevHome
-  }
-})
-
-await okAsync('config-info: 面板保存（volatile 重组装）后快照仍报**配置层生效表**，不退化成覆盖表（v0.7 回归锁）', async () => {
-  const tmp = await mkdtemp(join(tmpdir(), 'dsh-rg-config-drift-'))
-  const prevHome = process.env.DSH_HOME
-  process.env.DSH_HOME = tmp
-  let route
-  try {
-    // 真实定时器 + 毫秒级注入（与相邻 config-info 集成用例同款）：
-    // 假时钟 + volatile 防抖叠用会出现「advance 早于 schedule」的竞态（实测 4/10 偶发超时）。
-    __setTestOverrides({ debounceMs: 1, maxWaitMs: 5, watchDebounceMs: 5 })
-    const fake = makeComposeCtx({
-      injectImpl: (deps, cb) => {
-        if (deps.includes('webServer')) {
-          cb({ webServer: { register: (r) => { route = r; return () => {} } }, effect: (fn) => fn() })
-        }
-      },
-    })
-    // 面板接管：只写 1 行覆盖（模拟老用户的面板表比内置表少）
-    const entry = makeEntryConfig([{ toolName: 'coder', provider: 'kimi-coding', model: 'k3' }], true)
-    await apply(fake.ctx, entry.config)
-    // 只等「终验摘要日志」而不是等报告落盘：本用例验的是快照内容，绕开 fs 时序（曾 5/10 偶发超时）
-    const summaryCount = () => fake.logs.info.concat(fake.logs.warn).filter((m) => m.includes('个角色')).length
-    await waitForCond(() => summaryCount() >= 1, '首次终验完成', 8000)
-    const readPayload = async () => {
-      const exchange = makeHttpExchange('GET', '127.0.0.1')
-      await route.handler(exchange.request, exchange.response)
-      return JSON.parse(exchange.response.body)
-    }
-    const before = await readPayload()
-    assert.equal(before.active, 'panel')
-    assert.equal(before.effective.roles.length, BUILTIN_COUNT,
-      '启动后快照 = 合并后的生效表（覆盖 1 行 + 内置补底）')
-
-    // 触发一次 volatile 重组装（面板保存）后，快照必须**仍**是配置层生效表
-    entry.setRoles([{ toolName: 'builder', provider: 'kimi-coding', model: 'k3' }])
-    fake.fireVolatile()
-    await waitForCond(() => summaryCount() >= 2, '重组装完成', 8000)
-    const after = await readPayload()
-    assert.equal(after.active, 'panel')
-    // 覆盖表只有 1 行（builder），但生效表 = builder + 内置补底（共 N+1 个不同角色）
-    assert.equal(after.effective.roles.length, BUILTIN_COUNT + 1,
-      `重组装后快照不得退化成覆盖表（实际 ${after.effective.roles.length} 行：`
-      + `${after.effective.roles.map((r) => r.toolName).join(',')}）`)
-    assert.ok(after.effective.roles.some((r) => r.toolName === 'builder' && r.from === 'panel'))
-    assert.ok(after.effective.roles.some((r) => r.toolName === 'vision' && r.from === 'builtin'),
-      '新增内置角色必须仍在快照里（这正是原 bug 丢掉的）')
-  } finally {
-    __setTestOverrides(undefined)
-    if (prevHome === undefined) delete process.env.DSH_HOME
-    else process.env.DSH_HOME = prevHome
-  }
-})
-
-ok('config-info: 两端端点一致 + host apply 接线（source-level 防漂移）', () => {
-  const hostSrc = readFileSync(fileURLToPath(new URL('../lib/index.js', import.meta.url)), 'utf8')
-  const controllerSrc = readFileSync(fileURLToPath(new URL('../src/client/controller.js', import.meta.url)), 'utf8')
-  const routeSrc = readFileSync(fileURLToPath(new URL('../lib/config-info.js', import.meta.url)), 'utf8')
-  assert.ok(controllerSrc.includes(`'${CONFIG_ROUTE_PATH}'`), '客户端端点必须与 host 路由逐字一致')
-  assert.ok(routeSrc.includes(`'${CONFIG_ROUTE_PATH}'`), 'host 路由路径必须是两端约定的常量')
-  assert.ok(hostSrc.includes('installConfigInfoRoute(ctx, buildConfigInfoSnapshot'), 'apply 必须安装配置查看路由')
-  assert.ok(hostSrc.includes('text: fileText'), '快照必须带上启动时读取的文件原文（保留注释）')
-  assert.ok(controllerSrc.includes('fetchConfigInfo') && controllerSrc.includes('openConfig'), 'controller 必须提供查看器动作与拉取方法')
-})
 
 // --- v0.3 GUI 面板 T4：client controller 纯逻辑（plans/v0.3-gui-panel.md §2.4/§4 T4，v0.3/AC-20..AC-27）---
 // 假 scope 对齐 0.1.7 的 ConfigFormController 契约（`ctx.configForms.get(entryId)` 的返回面：
@@ -3385,28 +2780,6 @@ await okAsync('controller: 起草后外部推进 revision（模拟他人保存�
   assert.equal(proj.dirty, true, '草稿必须保留，不得静默丢弃')
 })
 
-await okAsync('controller: exitToFile 清用户层（enabled + roles 两个 unset）→ 真正退出接管、rows 回落 base 层值（v0.4/AC-14）', async () => {
-  const base = SECTION_ALL()
-  const userTable = { ...SECTION_ALL(), enabled: true } // 接管态才允许「回到文件配置」
-  userTable.roles.find((r) => r.toolName === 'coder').model = 'user-x'
-  const scope = makeFakeScope({ value: userTable, base, user: userTable, revision: 5 })
-  const controller = new RolegroupCardController(scope, IDLE_CTX())
-  const face = controller.inject()
-  assert.equal(face.hooks.rolegroupCard.getSnapshot().rows.find((r) => r.toolName === 'coder').model, 'user-x')
-  face.exitToFile()
-  await flushMicrotasks()
-  // v0.4：重置 = enabled + roles 一起 unset，否则 host 仍把 enabled=true 视为「已接管」
-  assert.equal(scope.calls.mutate.length, 1, '重置应走一次 mutate（两个 unset）')
-  assert.deepEqual(scope.calls.mutate[0].ops, [
-    { op: 'unset', path: ['enabled'] },
-    { op: 'unset', path: ['roles'] },
-  ], '重置必须同时清 enabled，才算真正退出接管')
-  assert.equal(scope.calls.unset.length, 0, '不该再走单字段 unset 通道')
-  const proj = face.hooks.rolegroupCard.getSnapshot()
-  const baseCoder = base.roles.find((r) => r.toolName === 'coder').model
-  assert.equal(proj.rows.find((r) => r.toolName === 'coder').model, baseCoder, '重置后 rows 必须 = base 层值')
-  assert.equal(proj.dirty, false)
-})
 
 await okAsync('controller: catalog 懒加载 + 合并——ready/partial、已存路由不在目录 → 保留为 available:false 选项（v0.3/AC-25）', async () => {
   const section = SECTION_ALL()
@@ -3446,7 +2819,7 @@ ok('controller: 接管态 rows = 整张生效表（含未覆盖的内置角色�
   const vision = snap.rows.find((r) => r.toolName === 'vision')
   assert.equal(vision.provider, 'qwen-token-plan-cn')
   assert.equal(vision.model, 'qwen3.8-flash')
-  assert.deepEqual(vision.fallbackModels, ['deepseek-official/deepseek-flash'], '补全的行必须带上内置备用链')
+  assert.deepEqual(vision.fallbackModels, DEFAULT_ROLES.vision.fallbackModels, '补全的行必须带上内置备用链')
   assert.equal(vision.isCustom, false, 'vision 是内置角色，不是自定义行（因此没有删除按钮）')
   assert.equal(snap.dirty, false, '补全不得把自己算成「有改动」')
 })
@@ -3465,10 +2838,11 @@ ok('controller: 历史遗留的「显式无链」内置行会被补回内置链�
     assert.ok(Array.isArray(row.fallbackModels) && row.fallbackModels.length > 0,
       `${row.toolName} 必须补回内置链（否则主路由不可用即剪枝）`)
   }
+  // 期望值直接引用内置表：链顺序/内容调整时不用再改测试
   assert.deepEqual(snap.rows.find((r) => r.toolName === 'vision').fallbackModels,
-    ['deepseek-official/deepseek-flash'])
+    DEFAULT_ROLES.vision.fallbackModels)
   assert.deepEqual(snap.rows.find((r) => r.toolName === 'analyst').fallbackModels,
-    ['deepseek-official/deepseek-flash', 'deepseek-official/deepseek-v4-pro'])
+    DEFAULT_ROLES.analyst.fallbackModels)
   assert.equal(snap.dirty, false, '补链不得把投影算成「有改动」')
 })
 
@@ -3489,7 +2863,7 @@ ok('controller: 保存整表时**每行都带 fallbackModels**（显式配置不
       `${row.toolName} 必须随行带回备用链（否则保存即丢降级）`)
   }
   assert.deepEqual(roles.find((r) => r.toolName === 'vision').fallbackModels,
-    ['deepseek-official/deepseek-flash'])
+    DEFAULT_ROLES.vision.fallbackModels)
 })
 
 ok('controller: 自定义角色追加在内置之后；未接管时不做补全（v0.8/AC-1 边界）', () => {
@@ -3524,10 +2898,7 @@ await okAsync('client-card: 不再有特殊「继承区」——所有角色都�
 await okAsync('controller: restoreOfficial = 零覆盖接管（只写 enabled=true + roles=[]，不写模型名）（v0.10/AC-1）', async () => {
   const section = SECTION_ALL()
   const scope = makeFakeScope({ value: { ...section, enabled: true }, base: section, revision: 7 })
-  let fetchCount = 0
-  const controller = new RolegroupCardController(scope, IDLE_CTX(), {
-    fetch: async () => { fetchCount += 1; return { ok: true, json: async () => ({ ok: true, active: 'builtin', effective: { roles: section.roles } }) } },
-  })
+  const controller = new RolegroupCardController(scope, IDLE_CTX())
   const face = controller.inject()
   await face.restoreOfficial()
   await flushMicrotasks()
@@ -3536,68 +2907,38 @@ await okAsync('controller: restoreOfficial = 零覆盖接管（只写 enabled=tr
     { op: 'set', path: ['enabled'], value: true },
     { op: 'set', path: ['roles'], value: [] },
   ], '恢复官方推荐 = 零覆盖接管；不得把 8 行模型名抄进配置（否则以后内置默认变了也不跟随）')
-  assert.equal(fetchCount >= 1, true, '动作后必须重新拉取生效表（预填要跟着变）')
   const proj = face.hooks.rolegroupCard.getSnapshot()
   assert.equal(proj.mode, 'official', '零覆盖接管后投影必须是 official')
 })
 
-await okAsync('controller: exitToFile 未接管时不可用；接管时 unset 两字段且**必定**刷新预填（v0.10/AC-2）', async () => {
-  const section = SECTION_ALL()
-  // ① 未接管 → 拒绝执行（按钮也会禁用）
-  const idle = makeFakeScope({ value: section, base: section })
-  const idleFace = new RolegroupCardController(idle, IDLE_CTX()).inject()
-  await idleFace.exitToFile()
-  await flushMicrotasks()
-  assert.equal(idle.calls.mutate.length, 0, '非接管态点「回到文件配置」不得发 mutate')
 
-  // ② 接管态：即使客户端快照仍显示 enabled=true（重置瞬间的真实情况），也必须重新拉预填
-  const scope = makeFakeScope({ value: { ...section, enabled: true }, base: section, revision: 3 })
-  // 关键：模拟「客户端快照还没更新」的真实竞态——mutate 只记账、不更新快照也不 notify。
-  // 这样刷新只能由 exitToFile 自己发起；若它用 isTakeover() 做 guard，就会跳过（旧 bug）。
-  scope.mutate = async (ops) => { scope.calls.mutate.push({ ops: JSON.parse(JSON.stringify(ops)) }); return 4 }
-  let fetchCount = 0
-  const controller = new RolegroupCardController(scope, IDLE_CTX(), {
-    fetch: async () => { fetchCount += 1; return { ok: true, json: async () => ({ ok: true, active: 'file', file: { path: '/home/u/.dsh/rolegroup.jsonc' }, effective: { roles: section.roles } }) } },
-  })
-  const face = controller.inject()
-  await face.exitToFile()
-  await flushMicrotasks()
-  assert.deepEqual(scope.calls.mutate[0].ops, [
-    { op: 'unset', path: ['enabled'] },
-    { op: 'unset', path: ['roles'] },
-  ])
-  assert.equal(fetchCount >= 1, true, '重置后必须重新拉取 —— 旧实现用 isTakeover() 做 guard，快照未更新时会跳过（用户实测踩到）')
-  assert.deepEqual(face.hooks.rolegroupCard.getSnapshot().landing, { kind: 'file', path: '/home/u/.dsh/rolegroup.jsonc' },
-    '落点预告必须来自 host 快照的 file.path')
+
+
+ok('controller: projection.mode 两态（official / custom）+ overrides 计数（v0.11/AC-3）', () => {
+  const section = SECTION_ALL()
+  const modeOf = (value) => new RolegroupCardController(
+    makeFakeScope({ value, base: section }), IDLE_CTX(),
+  ).projection()
+  const official = modeOf({ ...section, enabled: true, roles: [] })
+  assert.equal(official.mode, 'official', '接管 + 零覆盖 = 跟随官方推荐')
+  assert.equal(official.overrides, 0)
+  const custom = modeOf({ ...section, enabled: true })
+  assert.equal(custom.mode, 'custom', '接管 + 有行 = 面板自定义')
+  assert.equal(custom.overrides, section.roles.length)
+  assert.equal(modeOf(section).mode, 'official', '未接管 = 没有任何覆盖 = 官方推荐')
 })
 
-ok('controller: projection.mode 三态（official / file / custom）（v0.10/AC-3）', () => {
-  const section = SECTION_ALL()
-  const modeOf = (value, effectiveSource) => {
-    const controller = new RolegroupCardController(makeFakeScope({ value, base: section }), IDLE_CTX())
-    controller.effective = { status: 'ready', roles: section.roles, error: undefined, source: effectiveSource, landing: undefined }
-    return controller.projection().mode
-  }
-  assert.equal(modeOf({ ...section, enabled: true, roles: [] }, 'panel'), 'official', '接管 + 零覆盖 = 跟随官方推荐')
-  assert.equal(modeOf({ ...section, enabled: true }, 'panel'), 'custom', '接管 + 有行 = 面板自定义')
-  assert.equal(modeOf(section, 'file'), 'file', '未接管 + 文件 = 使用文件配置')
-  assert.equal(modeOf(section, 'builtin'), 'official', '未接管 + 无文件 = 官方推荐')
-})
-
-ok('client-locales: 两个动作的措辞不得互相冒充（v0.10/AC-4）', async () => {
-  const { zh, en } = await import(new URL('../src/client/locales.js', import.meta.url))
-  // 「回到文件配置」不得让人以为会回出厂
-  for (const [name, dict] of [['zh', zh], ['en', en]]) {
-    for (const banned of ['默认', '推荐', '出厂', '恢复', 'default', 'recommend', 'factory', 'restore']) {
-      assert.equal(dict.exitToFile.toLowerCase().includes(banned.toLowerCase()), false,
-        `${name}.exitToFile 不得含「${banned}」（它只是退出接管，结果取决于有没有 jsonc）`)
-    }
-  }
-  assert.ok(zh.restoreOfficial.includes('官方推荐'), zh.restoreOfficial)
-  assert.ok(/official defaults/i.test(en.restoreOfficial), en.restoreOfficial)
-  // 落点预告必须存在
-  assert.ok(zh.exitToFileHintFile && zh.exitToFileHintBuiltin && en.exitToFileHintFile && en.exitToFileHintBuiltin,
-    '必须有落点预告文案')
+ok('controller: 未接管时 rows 直接来自内置表（客户端自带 DEFAULT_ROLES，不发请求）（v0.11/AC-4）', () => {
+  let fetched = 0
+  const controller = new RolegroupCardController(
+    makeFakeScope({ value: SECTION_ALL(), base: SECTION_ALL() }),
+    IDLE_CTX(),
+    { fetch: async () => { fetched += 1; throw new Error('不应发请求') } },
+  )
+  const rows = controller.inject().hooks.rolegroupCard.getSnapshot().rows
+  assert.deepEqual(rows.map((r) => r.toolName), Object.keys(DEFAULT_ROLES), '未接管必须直接渲染内置表')
+  assert.equal(rows.length, BUILTIN_COUNT)
+  assert.equal(fetched, 0, '未接管时不得再请求宿主（配置文件层已删除）')
 })
 
 await okAsync('controller: addRole/removeRole 增删草稿行；非法行（空 provider）投影 invalidFields 且 save 本地拦截（v0.3/AC-26）', async () => {
@@ -3628,163 +2969,9 @@ await okAsync('controller: addRole/removeRole 增删草稿行；非法行（空 
   assert.equal(proj.dirty, false, '增后又删回必须与生效值一致')
 })
 
-await okAsync('controller: 配置文件按钮——fetch 后把路径交给右侧栏；无文件/右侧栏不可用/HTTP 失败都内联投影（config-viewer/AC-3）', async () => {
-  const section = SECTION_ALL()
-  const makeController = (fetchImpl, openConfigFile) => new RolegroupCardController(
-    makeFakeScope({ value: section, base: SECTION_ALL(), user: undefined }),
-    makeFakeClientCtx({ ok: true, value: { groups: [], failures: [] } }),
-    { fetch: fetchImpl, openConfigFile },
-  )
-  const payloadWithFile = {
-    ok: true,
-    active: 'file',
-    file: { path: '/home/me/.dsh/rolegroup.jsonc', error: null },
-    effective: { roles: [], problems: [] },
-  }
 
-  // ① 成功：fetch → 路径交给 openConfigFile → 返回 true（卡片据此关闭设置弹窗）
-  const calls = []
-  let openedPath
-  const okController = makeController(async (url, options) => {
-    calls.push({ url, options })
-    return { ok: true, json: async () => payloadWithFile }
-  }, (path) => { openedPath = path; return true })
-  const okFace = okController.inject()
-  const opened = await okFace.openConfig()
-  assert.equal(opened, true, '成功打开必须返回 true')
-  assert.equal(openedPath, '/home/me/.dsh/rolegroup.jsonc', '必须把 host 给出的绝对路径交给右侧栏')
-  assert.equal(calls.length, 1)
-  assert.equal(calls[0].url, CONFIG_ROUTE_PATH, '端点必须与 host 注册路径一致')
-  assert.equal(calls[0].options.cache, 'no-store')
-  let proj = okFace.hooks.rolegroupCard.getSnapshot()
-  assert.equal(proj.config.status, 'idle')
-  assert.equal(proj.config.error, undefined)
-  assert.equal(proj.config.notice, undefined)
 
-  // ② 无文件：不调用右侧栏，返回 false，留下 noFile notice
-  let called = false
-  const noFileController = makeController(async () => ({
-    ok: true,
-    json: async () => ({ ok: true, active: 'builtin', file: null, effective: { roles: [], problems: [] } }),
-  }), () => { called = true; return true })
-  const noFileFace = noFileController.inject()
-  assert.equal(await noFileFace.openConfig(), false)
-  assert.equal(called, false, '没有配置文件时不得调用右侧栏')
-  proj = noFileFace.hooks.rolegroupCard.getSnapshot()
-  assert.equal(proj.config.status, 'idle')
-  assert.equal(proj.config.notice, 'noFile', '无文件必须留下可显示的 notice')
 
-  // ③ 右侧栏不可用：返回 false + error 投影（卡片内联显示，不弹窗）
-  const sidebarDown = makeController(async () => ({
-    ok: true, json: async () => payloadWithFile,
-  }), () => false)
-  const sidebarFace = sidebarDown.inject()
-  assert.equal(await sidebarFace.openConfig(), false)
-  proj = sidebarFace.hooks.rolegroupCard.getSnapshot()
-  assert.equal(proj.config.status, 'error')
-  assert.ok(proj.config.error.includes('sidebar unavailable'), proj.config.error)
-
-  // ④ HTTP 失败：error 投影带状态码（可行动）
-  const failing = makeController(async () => ({ ok: false, status: 500 }), () => true)
-  const failFace = failing.inject()
-  assert.equal(await failFace.openConfig(), false)
-  proj = failFace.hooks.rolegroupCard.getSnapshot()
-  assert.equal(proj.config.status, 'error')
-  assert.ok(proj.config.error.includes('500'), proj.config.error)
-})
-
-await okAsync('controller: 未接管时用 host 生效表预填——默认有内容、自定义角色可识别、改后保存整表接管（prefill/AC-1）', async () => {
-  const effective = [
-    { toolName: 'analyst', provider: 'qwen-token-plan-cn', model: 'qwen3.8-flash', persona: '分析人格', summary: '需求澄清', reasoningEffort: 'high', from: 'file' },
-    { toolName: 'my_role', provider: 'kimi-coding', model: 'k3', persona: '自定义人格', summary: '自定义职责', from: 'file' },
-  ]
-  const scope = makeFakeScope({ value: { roles: [] }, base: SECTION_ALL(), user: undefined, revision: 3 })
-  const controller = new RolegroupCardController(
-    scope,
-    makeFakeClientCtx({ ok: true, value: { groups: [], failures: [] } }),
-    { fetch: async () => ({ ok: true, json: async () => ({ ok: true, effective: { roles: effective } }) }) },
-  )
-  const face = controller.inject()
-  const unsubscribe = face.hooks.rolegroupCard.subscribe(() => {})
-  await flushMicrotasks()
-  let proj = face.hooks.rolegroupCard.getSnapshot()
-  assert.equal(proj.takeover, false)
-  assert.equal(proj.effective.status, 'ready', '首次展开必须拉取当前生效表')
-  assert.equal(proj.effective.prefilled, true)
-  assert.equal(proj.rows.length, 2, '未接管时默认必须显示当前生效角色，而不是空表')
-  assert.equal(proj.rows[0].persona, '分析人格', '预填必须带 persona')
-  assert.equal(proj.rows[0].reasoningEffort, 'high', '预填必须带 reasoningEffort')
-  assert.equal(proj.rows[0].isCustom, false, '内置角色不是自定义行')
-  assert.equal(proj.rows[1].isCustom, true, 'jsonc 新增角色是自定义行')
-  assert.equal(proj.dirty, false, '预填不得默认置 dirty')
-
-  face.editRole('analyst', 'model', 'qwen3.8-max')
-  proj = face.hooks.rolegroupCard.getSnapshot()
-  assert.equal(proj.dirty, true, '修改预填行必须置 dirty')
-  face.save()
-  await flushMicrotasks()
-  const saved = scope.calls.mutate[0]
-  assert.equal(saved.ops[0].value, true, '保存必须接管')
-  assert.equal(saved.ops[1].value.length, 2, '保存必须把整张生效表写入面板')
-  assert.equal(saved.ops[1].value.find((role) => role.toolName === 'analyst').model, 'qwen3.8-max')
-  assert.equal(saved.ops[1].value.find((role) => role.toolName === 'my_role').provider, 'kimi-coding')
-  unsubscribe()
-})
-
-await okAsync('controller: 预填读取失败 → 错误投影 + 重试；失败时仍可手动新增（prefill/AC-2）', async () => {
-  let fail = true
-  const scope = makeFakeScope({ value: { roles: [] }, base: SECTION_ALL(), user: undefined })
-  const controller = new RolegroupCardController(
-    scope,
-    makeFakeClientCtx({ ok: true, value: { groups: [], failures: [] } }),
-    {
-      fetch: async () => fail
-        ? { ok: false, status: 500 }
-        : { ok: true, json: async () => ({ ok: true, effective: { roles: [{ toolName: 'scout', provider: 'deepseek-official', model: 'deepseek-flash' }] } }) },
-    },
-  )
-  const face = controller.inject()
-  const unsubscribe = face.hooks.rolegroupCard.subscribe(() => {})
-  await flushMicrotasks()
-  let proj = face.hooks.rolegroupCard.getSnapshot()
-  assert.equal(proj.effective.status, 'error')
-  assert.ok(proj.effective.error.includes('500'), proj.effective.error)
-  // 失败不阻断旧行为：仍可手动新增一行（保存前会有明确警示）
-  face.addRole()
-  proj = face.hooks.rolegroupCard.getSnapshot()
-  assert.equal(proj.rows.length, 1)
-  assert.equal(proj.rows[0].toolName, 'role_1')
-  fail = false
-  face.retryEffective()
-  await flushMicrotasks()
-  proj = face.hooks.rolegroupCard.getSnapshot()
-  assert.equal(proj.effective.status, 'ready', '重试必须重新拉取')
-  assert.equal(proj.rows.length, 1, '已有草稿不得被重试静默清空')
-  unsubscribe()
-})
-
-await okAsync('controller: 绝不读 ctx.fetch——cordis 严格属性访问会抛；预填只走 options.fetch/globalThis（回归锁）', async () => {
-  // 真机实测：`this.ctx?.fetch` 会触发 cordis “cannot get property "fetch" without inject”，
-  // 导致预填永远失败。用严格 Proxy 模拟该行为：任何未注入属性访问都抛错。
-  const base = makeFakeClientCtx({ ok: true, value: { groups: [], failures: [] } })
-  const strictCtx = new Proxy(base, {
-    get(target, prop) {
-      if (prop in target) return target[prop]
-      throw new Error(`cannot get property "${String(prop)}" without inject`)
-    },
-  })
-  const scope = makeFakeScope({ value: { roles: [] }, base: SECTION_ALL(), user: undefined })
-  const controller = new RolegroupCardController(scope, strictCtx, {
-    fetch: async () => ({ ok: true, json: async () => ({ ok: true, effective: { roles: [{ toolName: 'scout', provider: 'deepseek-official', model: 'deepseek-flash' }] } }) }),
-  })
-  const face = controller.inject()
-  const unsubscribe = face.hooks.rolegroupCard.subscribe(() => {})
-  await flushMicrotasks()
-  const proj = face.hooks.rolegroupCard.getSnapshot()
-  assert.equal(proj.effective.status, 'ready', '严格 ctx 下预填必须仍可用（不得读 ctx.fetch）')
-  assert.equal(proj.rows.length, 1)
-  unsubscribe()
-})
 
 await okAsync('controller: 推理档位按模型目录校验——非法值标红并拦截保存；切模型清掉不支持的旧档位（reasoning-effort/AC-1）', async () => {
   const section = SECTION_ALL()
@@ -3841,52 +3028,51 @@ await okAsync('controller: 推理档位按模型目录校验——非法值标�
   unsubscribe()
 })
 
-await okAsync('controller: provider 未注册 → routeGaps 提示 + 一键补齐到默认/首个可用模型（fill/AC-1）', async () => {
-  const effective = [
-    { toolName: 'analyst', provider: 'qwen-token-plan-cn', model: 'qwen3.8-max', reasoningEffort: 'high', persona: '分析', summary: '需求澄清' },
-    { toolName: 'scout', provider: 'deepseek-official', model: 'deepseek-flash', persona: '探索', summary: '定位' },
-  ]
+await okAsync('controller: provider 未注册 → routeGaps + 一键补齐到默认/首个可用模型；无缺口时按钮不渲染（fill/AC-1）', async () => {
+  // v0.11：接管态显示整张表（内置补全），所以缺口 = 所有 provider 不在目录里的内置角色。
+  // 目录里给 deepseek + kimi，缺的只有 qwen → 缺口应恰好是 4 个 qwen 角色。
   const mkCatalog = (withDefault) => ({
-    groups: [{ id: 'deepseek-official', name: 'DeepSeek', models: [{ id: 'deepseek-flash', name: 'deepseek-flash' }, { id: 'deepseek-v4-pro', name: 'deepseek-v4-pro' }] }],
+    groups: [
+      { id: 'deepseek-official', name: 'DeepSeek', models: [{ id: 'deepseek-flash', name: 'deepseek-flash' }, { id: 'deepseek-v4-pro', name: 'deepseek-v4-pro' }] },
+      { id: 'kimi-coding', name: 'Kimi', models: [{ id: 'k3.1-pro', name: 'k3.1-pro' }] },
+    ],
     failures: [],
     ...(withDefault ? { default: { provider: 'deepseek-official', model: 'deepseek-v4-pro' } } : {}),
   })
   const makeController = (catalog) => {
-    const scope = makeFakeScope({ value: { roles: [] }, base: SECTION_ALL(), user: undefined })
-    const controller = new RolegroupCardController(scope, makeFakeClientCtx({ ok: true, value: catalog }), {
-      fetch: async () => ({ ok: true, json: async () => ({ ok: true, effective: { roles: effective } }) }),
-    })
-    return controller
+    const scope = makeFakeScope({ value: { enabled: true, roles: [] }, base: SECTION_ALL(), user: undefined })
+    return new RolegroupCardController(scope, makeFakeClientCtx({ ok: true, value: catalog }))
   }
 
   // ① 有部署默认路由 → 补到默认
-  let controller = makeController(mkCatalog(true))
-  let face = controller.inject()
-  let unsubscribe = face.hooks.rolegroupCard.subscribe(() => {})
+  const controller = makeController(mkCatalog(true))
+  const face = controller.inject()
+  const unsubscribe = face.hooks.rolegroupCard.subscribe(() => {})
   await flushMicrotasks()
   let proj = face.hooks.rolegroupCard.getSnapshot()
-  assert.deepEqual(proj.routeGaps, [{ toolName: 'analyst', provider: 'qwen-token-plan-cn' }], '只标 provider 未注册的行')
+  assert.deepEqual(proj.routeGaps.map((g) => g.toolName), ['analyst', 'reviewer', 'scribe', 'vision'],
+    '只标 provider 未注册的行（qwen 系 4 个）')
   face.fillUnavailableRoutes()
   proj = face.hooks.rolegroupCard.getSnapshot()
-  let row = proj.rows.find((r) => r.toolName === 'analyst')
-  assert.equal(row.provider, 'deepseek-official')
-  assert.equal(row.model, 'deepseek-v4-pro', '必须优先用部署默认路由')
-  assert.equal(row.reasoningEffort, '', '换模型后清掉旧推理档位')
+  for (const name of ['analyst', 'reviewer', 'scribe', 'vision']) {
+    const row = proj.rows.find((r) => r.toolName === name)
+    assert.equal(row.provider, 'deepseek-official', `${name} 必须补到已注册 provider`)
+    assert.equal(row.model, 'deepseek-v4-pro', `${name} 必须优先用部署默认路由`)
+    assert.equal(row.reasoningEffort, '', '换模型后清掉旧推理档位')
+  }
   assert.equal(proj.dirty, true, '补齐只改草稿，不自动保存')
   assert.deepEqual(proj.routeGaps, [], '补齐后不再有缺口')
   assert.equal(proj.rows.find((r) => r.toolName === 'scout').provider, 'deepseek-official', '可用行不得被改动')
   unsubscribe()
 
   // ② 没有默认路由 → 取第一个可用 provider 的第一个模型
-  controller = makeController(mkCatalog(false))
-  face = controller.inject()
-  unsubscribe = face.hooks.rolegroupCard.subscribe(() => {})
+  const noDefault = makeController(mkCatalog(false)).inject()
+  noDefault.hooks.rolegroupCard.subscribe(() => {})
   await flushMicrotasks()
-  face.fillUnavailableRoutes()
-  proj = face.hooks.rolegroupCard.getSnapshot()
-  row = proj.rows.find((r) => r.toolName === 'analyst')
+  noDefault.fillUnavailableRoutes()
+  const proj2 = noDefault.hooks.rolegroupCard.getSnapshot()
+  const row = proj2.rows.find((r) => r.toolName === 'analyst')
   assert.deepEqual([row.provider, row.model], ['deepseek-official', 'deepseek-flash'])
-  unsubscribe()
 })
 
 ok('settings-nav-icon: 按 label 标记带 svg 的导航按钮；CSS 走 mask；无 document 安全 no-op', () => {
@@ -3923,56 +3109,8 @@ await okAsync('settings-nav-icon: 注入样式并标记设置导航按钮，disp
   assert.equal(style.removed, true)
 })
 
-ok('config-file: host 绝对路径 → 右侧栏 Session 文件地址（工作区外保留绝对路径，路径段逐个编码）', () => {
-  assert.equal(
-    configFileAddress('s1', '/home/me/.dsh/rolegroup.jsonc'),
-    'dsh-resource://file/session/s1//home/me/.dsh/rolegroup.jsonc',
-    '绝对路径必须保留前导空段（Session 地址里就是绝对路径）',
-  )
-  assert.equal(
-    configFileAddress('s 1', '/home/me/My Config/rolegroup.jsonc'),
-    'dsh-resource://file/session/s%201//home/me/My%20Config/rolegroup.jsonc',
-    'session id 与路径段都必须逐段编码',
-  )
-  assert.equal(
-    configFileAddress('s1', 'C:\\work\\rolegroup.jsonc'),
-    'dsh-resource://file/session/s1/C:/work/rolegroup.jsonc',
-    'Windows 反斜杠归一为 /，盘符冒号保留',
-  )
-})
 
-ok('config-file: 把路径交给右侧栏——取 mounted sessionId、openResource；缺服务/无 Session/抛错都返回 false', () => {
-  const opened = []
-  const sidebarRight = {
-    mounted: { getSnapshot: () => 'session-1' },
-    openResource: (address) => opened.push(address),
-  }
-  assert.equal(openConfigFileInSidebar(sidebarRight, '/home/me/.dsh/rolegroup.jsonc'), true)
-  assert.deepEqual(opened, ['dsh-resource://file/session/session-1//home/me/.dsh/rolegroup.jsonc'])
-  assert.equal(openConfigFileInSidebar(undefined, '/home/me/.dsh/rolegroup.jsonc'), false, '服务缺席必须降级')
-  assert.equal(openConfigFileInSidebar({ mounted: { getSnapshot: () => undefined }, openResource() {} }, '/x'), false, '无屏上 Session 必须降级')
-  assert.equal(openConfigFileInSidebar({
-    mounted: { getSnapshot: () => 'session-1' },
-    openResource() { throw new Error('no type') },
-  }, '/x'), false, 'openResource 抛错必须降级而不是崩')
-})
 
-ok('client-index: 「配置文件」按钮经 sidebarRight 打开右侧栏，成功后关闭设置弹窗（source-level 接线）', () => {
-  const indexSrc = readFileSync(fileURLToPath(new URL('../src/client/index.js', import.meta.url)), 'utf8')
-  const cardSrc = readFileSync(fileURLToPath(new URL('../src/client/card.jsx', import.meta.url)), 'utf8')
-  const helperSrc = readFileSync(fileURLToPath(new URL('../src/client/config-file.js', import.meta.url)), 'utf8')
-  for (const needle of [
-    "ctx.inject?.(['sidebarRight']",
-    'openConfigFile: (path) => openConfigFileInSidebar(sidebarRight, path)',
-  ]) {
-    assert.ok(indexSrc.includes(needle), `client index 缺少右侧栏接线：${needle}`)
-  }
-  assert.ok(helperSrc.includes('sidebarRight.openResource(configFileAddress(sessionId, path))'),
-    '把地址交给 openResource 的逻辑必须在 config-file.js（node 可测）')
-  assert.ok(cardSrc.includes("props.openConfig().then"), '按钮必须在打开成功后回调（以便关闭设置弹窗）')
-  assert.ok(cardSrc.includes("typeof props.close === 'function'") && cardSrc.includes('props.close()'),
-    '打开成功后必须关闭设置弹窗，才能看到右侧栏')
-})
 
 ok('controller: 零浏览器依赖——controller.js 全文无 document/window/react 字样（v0.3/AC-27）', () => {
   const src = readFileSync(fileURLToPath(new URL('../src/client/controller.js', import.meta.url)), 'utf8')
@@ -4201,7 +3339,7 @@ await okAsync('client-card: 未接管 → 一行状态 + 空态引导；长层�
   const card = readFileSync(fileURLToPath(new URL('../src/client/card.jsx', import.meta.url)), 'utf8')
   const { zh, en } = await import(new URL('../src/client/locales.js', import.meta.url))
   for (const [name, dict] of [['zh', zh], ['en', en]]) {
-    for (const key of ['statusOfficial', 'statusFile', 'statusCustom', 'emptyNotTakeover', 'emptyTakeover', 'layerSummary', 'layerNote']) {
+    for (const key of ['statusOfficial', 'statusCustom', 'emptyNotTakeover', 'emptyTakeover', 'layerSummary', 'layerNote']) {
       assert.ok(typeof dict[key] === 'string' && dict[key] !== '', `${name}.${key} 必须存在且非空`)
     }
     // 旧的整段说明词条必须删除——防止以后又把长段落加回页面
@@ -4209,8 +3347,8 @@ await okAsync('client-card: 未接管 → 一行状态 + 空态引导；长层�
       `${name} 词典不得保留整段说明词条（notTakeover / takeoverNote）`)
   }
   // 一行状态挂在 takeover 分支上；空态也分两种模式
-  assert.ok(/state\.mode === 'official'/.test(card) && /state\.mode === 'file'/.test(card),
-    '状态行必须按 takeover 分支渲染，且只渲染一行')
+  assert.ok(/state\.mode === 'custom'/.test(card) && card.includes("t('statusOfficial')"),
+    '状态行必须按两态渲染（official / custom），且只渲染一行')
   assert.ok(card.includes("t('emptyTakeover')") && card.includes("t('emptyNotTakeover')"),
     '空表必须给出空态引导（两种模式各一句）')
   // 常驻描述行不得再塞优先级链（2026-10-21 用户：描述太长；优先级属于折叠说明/README）
@@ -4220,9 +3358,9 @@ await okAsync('client-card: 未接管 → 一行状态 + 空态引导；长层�
   assert.ok(/<details className="dsh-rg-layer">/.test(card), '层级说明必须是 <details> 折叠块')
   assert.ok(card.includes("t('layerNote')"), '折叠块内必须承载完整层级说明')
   // 信息没有丢：优先级链 / 整层让位 / doctor 仍在折叠说明里
-  assert.ok(zh.layerNote.includes('优先级') && zh.layerNote.includes('整层') && zh.layerNote.includes('/rolegroup doctor'),
-    `中文折叠说明须保留优先级/整层/doctor：${zh.layerNote}`)
-  assert.ok(/Precedence/.test(en.layerNote) && /whole layer|yields/i.test(en.layerNote) && en.layerNote.includes('/rolegroup doctor'),
+  assert.ok(zh.layerNote.includes('内置表') && zh.layerNote.includes('面板') && zh.layerNote.includes('/rolegroup doctor'),
+    `中文折叠说明须保留两层模型与 doctor 入口：${zh.layerNote}`)
+  assert.ok(/built-in/i.test(en.layerNote) && /panel/i.test(en.layerNote) && en.layerNote.includes('/rolegroup doctor'),
     `英文折叠说明须保留优先级/整层/doctor：${en.layerNote}`)
 })
 
@@ -4294,10 +3432,11 @@ ok('client-bundle: 头部版本号由构建期 define 注入（package.json 唯�
   assert.ok(bundle.includes(JSON.stringify(pkg.version)),
     `产物必须内联 package.json 的版本号 ${pkg.version}——否则设置页头部会显示 vdev`)
   assert.ok(bundle.includes('https://github.com/zhouxnsz/dsh-rolegroup'), '产物必须内联 GitHub 仓库地址')
-  assert.ok(bundle.includes('dsh-rg-action'), '产物必须内联头部动作按钮样式（GitHub / 配置文件共用）')
-  assert.ok(bundle.includes('dsh-resource://file/'), '产物必须内联右侧栏文件地址前缀')
-  assert.ok(bundle.includes('sidebarRight'), '产物必须内联右侧栏服务接线（按钮要落到右侧栏）')
-  assert.ok(bundle.includes(CONFIG_ROUTE_PATH), '产物必须内联配置查看接口路径')
+  assert.ok(bundle.includes('dsh-rg-action'), '产物必须内联头部动作按钮样式（GitHub 入口共用）')
+  // v0.11：配置文件查看器整条链路（右侧栏 / 只读路由）已删除，产物里不得再出现
+  assert.equal(bundle.includes('dsh-resource://file/'), false, '配置文件查看器已删除，产物不得再内联右侧栏前缀')
+  assert.equal(bundle.includes('sidebarRight'), false, '配置文件查看器已删除，产物不得再内联右侧栏接线')
+  assert.equal(bundle.includes('/api/dsh-rolegroup/config'), false, '只读路由已删除，产物不得再引用')
 })
 
 // --- 设置页头部：真实产物的渲染文本 ---
@@ -4373,10 +3512,9 @@ await okAsync('client-bundle: 真实产物的头部渲染出「角色配置 v<�
   }
   const baseProjection = {
     available: true, writable: true, takeover: false, dirty: true, saving: false,
-    mode: 'file', overrides: 0, landing: { kind: 'file', path: '/home/u/.dsh/rolegroup.jsonc' },
+    mode: 'official', overrides: 0,
     failed: false, conflicted: false, rows: [],
     catalog: { status: 'idle', groups: [], partial: false }, routeGaps: [], basePresent: true,
-    effective: { required: true, status: 'ready', error: undefined, prefilled: true },
     config: { status: 'idle', error: undefined, notice: undefined },
   }
   const nodes = renderCard(baseProjection)
@@ -4409,19 +3547,16 @@ await okAsync('client-bundle: 真实产物的头部渲染出「角色配置 v<�
     'GitHub 链接必须渲染 GitHub 文案')
   assert.ok(nodes.some((node) => node.props?.className === 'dsh-rg-dirty'),
     '脏标记必须与 GitHub 入口同处头部动作区（dirty=true 时渲染）')
-  // 头部动作区必须同时有「配置文件」按钮与 GitHub 链接
+  // 头部动作区：只剩 GitHub 链接（配置文件查看器已于 v0.11 删除）
   const actions = nodes.find((node) => node.props?.className === 'dsh-rg-headActions')
   const actionTexts = collectTexts(actions)
-  assert.ok(actionTexts.includes(zh.configFile), `头部必须有「配置文件」按钮：${JSON.stringify(actionTexts)}`)
   assert.ok(actionTexts.includes(zh.github), '头部必须保留 GitHub 链接')
-  const configButton = nodes.find((node) => node.type === 'button'
-    && collectTexts(node).includes(zh.configFile))
-  assert.ok(configButton, '「配置文件」必须是可点击按钮')
-  assert.equal(typeof configButton.props.onClick, 'function', '按钮必须绑定点击处理（openConfig）')
-  assert.equal(configButton.props.disabled, false, '空闲态按钮必须可点击')
+  assert.equal(actionTexts.some((text) => text === '配置文件'), false, '头部不得再有「配置文件」按钮')
+  assert.equal(nodes.some((node) => node.type === 'button' && collectTexts(node).includes('配置文件')), false,
+    '配置文件查看器已删除，不得再渲染该按钮')
 
   // 未接管：可见文案只有一行状态 + 空态引导；长层级说明必须在默认收起的 <details> 里。
-  assert.ok(nodes.some((node) => collectTexts(node).join('').includes(zh.statusFile)), '文件配置态必须渲染一行状态')
+  assert.ok(nodes.some((node) => collectTexts(node).join('').includes(zh.statusOfficial)), '未接管（官方推荐态）必须渲染一行状态')
   assert.ok(nodes.some((node) => textOf(node) === zh.emptyNotTakeover), '空表必须渲染未接管空态引导')
   const layer = nodes.find((node) => node.type === 'details' && node.props?.className === 'dsh-rg-layer')
   assert.ok(layer, '层级说明必须是 <details> 折叠块')
@@ -4436,121 +3571,14 @@ await okAsync('client-bundle: 真实产物的头部渲染出「角色配置 v<�
     takeover: true,
     mode: 'custom',
     overrides: 8,
-    effective: { required: false, status: 'ready', error: undefined, prefilled: false },
   })
   assert.ok(takeoverNodes.some((node) => collectTexts(node).join('').includes(zh.statusCustom)), '自定义态必须渲染自定义状态行')
   assert.ok(takeoverNodes.some((node) => textOf(node) === zh.emptyTakeover), '接管态空表必须渲染接管空态')
-  assert.ok(!takeoverNodes.some((node) => collectTexts(node).join('').includes(zh.statusFile)), '自定义态不得残留文件配置文案')
+  assert.ok(!takeoverNodes.some((node) => collectTexts(node).join('').includes(zh.statusOfficial)), '自定义态不得残留官方推荐文案')
   assert.ok(takeoverNodes.some((node) => node.props?.className === 'dsh-rg-status dsh-rg-statusOn'),
     '接管态状态行必须带点亮类')
 
-  // —— 未接管预填：有行时给出「已填入当前生效配置」提示；加载中禁用编辑；失败可重试 ——
-  const prefillNodes = renderCard({
-    ...baseProjection,
-    rows: [{
-      toolName: 'analyst', provider: 'qwen-token-plan-cn', model: 'qwen3.8-flash',
-      reasoningEffort: '', persona: '分析人格', summary: '需求澄清', isCustom: false, invalidFields: [],
-    }],
-  })
-  assert.ok(textsOfNodes(prefillNodes).includes(zh.prefillHint), '预填有行时必须提示已填入当前生效配置')
 
-  const effectiveLoadingNodes = renderCard({
-    ...baseProjection,
-    rows: [],
-    effective: { required: true, status: 'loading', error: undefined, prefilled: false },
-  })
-  assert.ok(textsOfNodes(effectiveLoadingNodes).includes(zh.effectiveLoading), '预填加载中必须给出内联提示')
-  assert.ok(!textsOfNodes(effectiveLoadingNodes).includes(zh.emptyNotTakeover), '加载中不得显示空表引导')
-  const loadingAdd = effectiveLoadingNodes.find((node) => node.type === 'button' && textsOfNodes([node]).includes(zh.addRole))
-  assert.equal(loadingAdd.props.disabled, true, '预填加载中必须禁用编辑按钮')
-
-  const effectiveErrorNodes = renderCard({
-    ...baseProjection,
-    rows: [],
-    effective: { required: true, status: 'error', error: 'HTTP 500', prefilled: false },
-  })
-  const effectiveErrorTexts = textsOfNodes(effectiveErrorNodes)
-  assert.ok(effectiveErrorTexts.includes(zh.effectiveError), '预填失败必须给出内联错误')
-  assert.ok(effectiveErrorTexts.includes(' (HTTP 500)'), '预填失败必须带细节')
-  assert.ok(effectiveErrorTexts.includes(zh.effectiveErrorHint), '预填失败必须给出保存警示')
-  const retryButton = effectiveErrorNodes.find((node) => node.type === 'button' && textsOfNodes([node]).includes(zh.retryEffective))
-  assert.ok(retryButton, '预填失败必须提供重试按钮')
-
-  // —— provider 未注册提示：有缺口时渲染提示 + 补齐按钮，无缺口时不渲染 ——
-  const gapNodes = renderCard({
-    ...baseProjection,
-    rows: [{ toolName: 'analyst', provider: 'qwen-token-plan-cn', model: 'qwen3.8-max', reasoningEffort: '', persona: '', summary: '', isCustom: false, invalidFields: [] }],
-    routeGaps: [{ toolName: 'analyst', provider: 'qwen-token-plan-cn' }],
-  })
-  const gapTexts = textsOfNodes(gapNodes)
-  assert.ok(gapTexts.includes('1'), '提示必须带上缺口数量')
-  assert.ok(gapTexts.includes(zh.routeGapNotice), '提示文案必须来自词典')
-  assert.ok(gapTexts.includes(zh.fillRoutes), '必须渲染补齐按钮')
-  const filler = gapNodes.find((node) => node.type === 'button' && textsOfNodes([node]).includes(zh.fillRoutes))
-  assert.ok(filler, '补齐按钮必须可点')
-  assert.ok(!textsOfNodes(baseProjection.routeGaps.length === 0 ? renderCard(baseProjection) : []).includes(zh.routeGapNotice),
-    '无缺口时不得出现提示')
-
-  // —— 推理档位：目录声明 efforts 时渲染 select，默认项显示模型默认档位；不支持时禁用 ——
-  const effortRow = {
-    toolName: 'coder', provider: 'kimi-coding', model: 'k3', reasoningEffort: '',
-    persona: '', summary: '', isCustom: false, invalidFields: [],
-  }
-  const effortCatalog = {
-    status: 'ready', partial: false,
-    groups: [{
-      id: 'kimi-coding',
-      name: 'Kimi Coding',
-      models: [{
-        id: 'k3',
-        name: 'K3',
-        reasoning: {
-          efforts: [{ id: 'low', name: 'Low' }, { id: 'high', name: 'High' }, { id: 'max', name: 'Max' }],
-          defaultEffort: 'high',
-        },
-      }],
-    }],
-  }
-  const effortNodes = renderCard({ ...baseProjection, rows: [effortRow], catalog: effortCatalog })
-  const effortTexts = textsOfNodes(effortNodes)
-  assert.ok(effortTexts.includes(`${zh.reasoningEffortDefault} (high)`), '推理档位默认项必须显示模型默认档位（high）')
-  for (const label of ['Low', 'High', 'Max']) assert.ok(effortTexts.includes(label), `推理档位缺少目录选项：${label}`)
-  assert.ok(effortNodes.some((node) => node.type === 'select' && node.props?.value === ''
-    && textsOfNodes([node]).includes(`${zh.reasoningEffortDefault} (high)`)), '有 efforts 时推理档位必须是 select')
-
-  const unsupportedCatalog = {
-    status: 'ready', partial: false,
-    groups: [{
-      id: 'kimi-coding',
-      name: 'Kimi Coding',
-      models: [{ id: 'kimi-for-coding', name: 'Kimi For Coding' }],
-    }],
-  }
-  const unsupportedNodes = renderCard({
-    ...baseProjection,
-    rows: [{ ...effortRow, model: 'kimi-for-coding' }],
-    catalog: unsupportedCatalog,
-  })
-  const unsupportedInput = unsupportedNodes.find((node) => node.type === 'input'
-    && node.props?.placeholder === zh.reasoningEffortUnsupported)
-  assert.ok(unsupportedInput, '不支持推理的模型必须给出禁用输入 + 提示')
-  assert.equal(unsupportedInput.props.disabled, true)
-
-  // ——「配置文件」按钮：不弹窗；loading / error / noFile 都以页面内联一行呈现 ——
-  const loadingNodes = renderCard({ ...baseProjection, config: { status: 'loading', error: undefined, notice: undefined } })
-  assert.ok(textsOfNodes(loadingNodes).includes(zh.configOpening), 'loading 态必须给出内联提示')
-  const loadingButton = loadingNodes.find((node) => node.type === 'button'
-    && collectTexts(node).includes(zh.configFile))
-  assert.equal(loadingButton.props.disabled, true, 'loading 态按钮必须禁用，防止重复点击')
-
-  const errorNodes = renderCard({ ...baseProjection, config: { status: 'error', error: 'HTTP 500', notice: undefined } })
-  const errorTexts = textsOfNodes(errorNodes)
-  assert.ok(errorTexts.includes(zh.configOpenFailed), 'error 态必须给出内联错误标题')
-  assert.ok(errorTexts.includes(' (HTTP 500)'), 'error 态必须把细节带上')
-  assert.ok(errorTexts.includes(zh.configRestartHint), 'error 态必须给出重启提示')
-
-  const noFileNodes = renderCard({ ...baseProjection, config: { status: 'idle', error: undefined, notice: 'noFile' } })
-  assert.ok(textsOfNodes(noFileNodes).includes(zh.configFileMissing), '无文件必须给出内联 notice')
 })
 
 // --- v0.4 settings 迁移 T5：client apply 时序与门控（plans/v0.4-settings-migration.md D7/T5）---

@@ -8,6 +8,39 @@
 
 ---
 
+## [0.11.0] — 2026-11-13
+
+用户说了一句"我们是不是搞复杂了"。复盘之后确认：复杂度来自**两个文件、两套真相**——配置既可以是
+`rolegroup.jsonc`，也可以是设置面板写进 profile patch 的那份。这版把文件层整个删掉。
+
+### Breaking
+
+- **`rolegroup.jsonc` 不再是配置来源。** 只保留两层：内置表 + 面板覆盖。存量文件不会报错，但也不会
+  被读取；需要的话用 `/rolegroup init` 导出当前绑定留档，再在面板里改。
+- **`/rolegroup init` 变成导出器**：只打印当前生效绑定的 JSONC 文本，不写文件。`--write` / `--project` /
+  `--diff` / `--force` 一律当作未知子命令报错（不静默忽略）。
+- **`/api/dsh-rolegroup/config` 路由已删除**，连同「配置文件」按钮与右侧栏预览。插件现在**不注册任何
+  HTTP 路由**，暴露面归零。
+- 启动报告的 `configSource` 只剩两态：settings 面板 或 `null`（内置表）；`configError` / `configMtimeMs`
+  恒为 `null`（键保留，红线 3「仅加性」）。
+
+### Changed
+
+- 面板状态行两态：**官方推荐（内置表）** / **面板自定义（N 行覆盖）**。未接管时直接用客户端打包的
+  `DEFAULT_ROLES` 渲染，不再请求宿主（之前那次"重置后显示旧表"就是因为预填请求被跳过）。
+- 动作收敛为三个：保存 / 放弃 / 恢复官方推荐。「回到文件配置」删除——它解决的问题（两个真相）已经不存在。
+- **备用链改为账号优先**：`deepseek-account/deepseek-flash` → `deepseek-official/deepseek-flash` →
+  `deepseek-official/deepseek-v4-pro`。原来的链只指向 `deepseek-official`（API Key），而多数用户是
+  **账号登录**（`dsh-llm-deepseek-account`，dsh-base 自带，目录里还有 v4-pro）。链只允许这两个 provider。
+- 「按当前可用模型补齐」在没有缺口时不渲染（以前是灰着，用户会问"为什么点不了"）。
+
+### Added
+
+- 断言：账号 provider 存在时链能降级到它、链上 provider 全不可用仍 fail-loud；未接管时面板不发请求；
+  两态投影；`init` 不写文件且旧标志报错。
+
+---
+
 ## [0.10.0] — 2026-11-13
 
 设置页的"重置"让人以为回出厂，实际只是退出接管。这版把三个概念在界面上拆开。

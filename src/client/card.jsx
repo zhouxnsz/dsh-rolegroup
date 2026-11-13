@@ -84,16 +84,6 @@ function GitHubMark() {
 }
 
 /** Small file mark for the config-viewer button. */
-function FileMark() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
-      <path d="M9.5 1.5H4a1 1 0 0 0-1 1v11a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V4.5L9.5 1.5Z" />
-      <path d="M9.5 1.5v3h3" />
-      <path d="M5.5 8h5M5.5 10.5h5" />
-    </svg>
-  )
-}
-
 /**
  * Render the rolegroup settings card: header (title / description / dirty badge),
  * one row per role (provider+model dropdowns fed by the projected catalog groups,
@@ -114,9 +104,7 @@ export function RolegroupCard(props) {
   // Same shape as the official cards: `if (props.view === "summary") return t("...")`.
   if (props.view === 'summary') return t('description')
 
-  const needsPrefill = state.effective?.required === true
   const disabled = !state.writable || state.saving
-    || (needsPrefill && state.effective.status !== 'ready' && state.effective.status !== 'error')
 
   // Header, following the settings-page convention: plugin name + version + GitHub entry,
   // description on the next line. The version comes from package.json via a build-time
@@ -130,22 +118,6 @@ export function RolegroupCard(props) {
         </div>
         <div className="dsh-rg-headActions">
           {state.dirty ? <span className="dsh-rg-dirty">{t('dirtyBadge')}</span> : null}
-          <button
-            type="button"
-            className="dsh-rg-action"
-            disabled={state.config?.status === 'loading'}
-            aria-label={t('configFileAria')}
-            title={t('configFileAria')}
-            onClick={() => {
-              // Close Settings on success so the rightbar file preview just opened is visible.
-              void props.openConfig().then((opened) => {
-                if (opened === true && typeof props.close === 'function') props.close()
-              })
-            }}
-          >
-            <FileMark />
-            <span>{t('configFile')}</span>
-          </button>
           <a
             className="dsh-rg-action"
             href={PLUGIN_REPO_URL}
@@ -176,10 +148,7 @@ export function RolegroupCard(props) {
   const groups = state.catalog.groups
   const modelsOf = (provider) => groups.find((group) => group.id === provider)?.models ?? []
 
-  /** Show the file name only: a full path would blow up the status line. */
-const baseNameOf = (path) => (typeof path === 'string' ? path.split('/').pop() ?? path : '')
-
-const renderRow = (row) => {
+  const renderRow = (row) => {
     const modelInfo = modelsOf(row.provider).find((model) => model.id === row.model)
     const efforts = Array.isArray(modelInfo?.reasoning?.efforts) ? modelInfo.reasoning.efforts : []
     const defaultEffort = modelInfo?.reasoning?.defaultEffort
@@ -320,11 +289,9 @@ const renderRow = (row) => {
           the page. Direct users skip paragraphs — 2026-10-21 user feedback. */}
       <div className="dsh-rg-statusBlock">
         <p className={`dsh-rg-status${state.mode === 'custom' ? ' dsh-rg-statusOn' : ''}`} role="status">
-          {state.mode === 'official'
-            ? t('statusOfficial')
-            : state.mode === 'file'
-              ? `${t('statusFile')}（${t('sourceFile')}: ${baseNameOf(state.landing?.path)}）`
-              : `${t('statusCustom')}（${state.overrides ?? 0} ${t('overridesCount')}）`}
+          {state.mode === 'custom'
+            ? `${t('statusCustom')}（${state.overrides ?? 0} ${t('overridesCount')}）`
+            : t('statusOfficial')}
         </p>
         <details className="dsh-rg-layer">
           <summary>{t('layerSummary')}</summary>
@@ -345,40 +312,11 @@ const renderRow = (row) => {
           </button>
         </div>
       ) : null}
-      {state.effective?.status === 'loading' || state.effective?.status === 'idle'
-        ? <p className="dsh-rg-notice" role="status">{t('effectiveLoading')}</p>
-        : null}
-      {state.effective?.status === 'error' ? (
-        <>
-          <p className="dsh-rg-alert" role="alert">
-            {t('effectiveError')}{state.effective.error ? ` (${state.effective.error})` : ''}
-          </p>
-          <p className="dsh-rg-configHint">{t('effectiveErrorHint')}</p>
-          <button type="button" className="dsh-rg-retry" disabled={state.saving} onClick={props.retryEffective}>
-            {t('retryEffective')}
-          </button>
-        </>
-      ) : null}
-      {state.effective?.prefilled && state.rows.length > 0
-        ? <p className="dsh-rg-configHint">{t('prefillHint')}</p>
-        : null}
-      {state.config?.status === 'loading' ? <p className="dsh-rg-notice" role="status">{t('configOpening')}</p> : null}
-      {state.config?.status === 'error' ? (
-        <>
-          <p className="dsh-rg-alert" role="alert">
-            {t('configOpenFailed')}{state.config.error ? ` (${state.config.error})` : ''}
-          </p>
-          <p className="dsh-rg-configHint">{t('configRestartHint')}</p>
-        </>
-      ) : null}
-      {state.config?.notice === 'noFile' ? <p className="dsh-rg-notice" role="status">{t('configFileMissing')}</p> : null}
       {state.failed ? <p className="dsh-rg-alert" role="alert">{t('saveFailed')}</p> : null}
       {state.conflicted ? <p className="dsh-rg-alert" role="status">{t('conflicted')}</p> : null}
       <div className="dsh-rg-rows">
         {state.rows.length === 0
-          ? state.effective?.status === 'ready'
-            ? <p className="dsh-rg-empty">{state.takeover ? t('emptyTakeover') : t('emptyNotTakeover')}</p>
-            : null
+          ? <p className="dsh-rg-empty">{state.takeover ? t('emptyTakeover') : t('emptyNotTakeover')}</p>
           : state.rows.map(renderRow)}
       </div>
 
@@ -397,19 +335,7 @@ const renderRow = (row) => {
         <button type="button" disabled={disabled || state.mode === 'official'} onClick={props.restoreOfficial}>
           {t('restoreOfficial')}
         </button>
-        {/* Back to file config: the outcome depends on whether a jsonc exists, so the
-            landing target is previewed right below the buttons. */}
-        <button type="button" disabled={disabled || !state.takeover} onClick={props.exitToFile}>
-          {t('exitToFile')}
-        </button>
       </div>
-      {state.takeover ? (
-        <p className="dsh-rg-liveHint">
-          {state.landing?.kind === 'file'
-            ? `${t('exitToFileHintFile')} ${state.landing.path}`
-            : t('exitToFileHintBuiltin')}
-        </p>
-      ) : null}
       <p className="dsh-rg-liveHint">{t('liveHint')}</p>
     </div>
   )

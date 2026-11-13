@@ -14,7 +14,6 @@
 // 值必须与 host 侧条目 id / 命名空间逐字一致。
 
 import { RolegroupCardController } from './controller.js'
-import { openConfigFileInSidebar } from './config-file.js'
 import { installSettingsNavIcon } from './settings-nav-icon.js'
 import { zh, en } from './locales.js'
 
@@ -33,18 +32,8 @@ export function apply(ctx) {
   // Settings-shell nav glyph: the slot has no icon option, so this is a scoped
   // CSS decoration that falls back to the shell's gear when unsupported.
   ctx.effect(() => installSettingsNavIcon(() => t('title')), 'dsh-rolegroup: settings nav icon')
-  // 「配置文件」按钮要落到右侧栏文档预览：sidebarRight 是可选服务（别的客户端组合可能没有），
-  // 因此用 ctx.inject 软取，绝不写进静态 inject（缺它时设置页仍须可用）。
-  let sidebarRight
-  try {
-    ctx.inject?.(['sidebarRight'], (injectedCtx) => { sidebarRight = injectedCtx.sidebarRight })
-  } catch (error) {
-    console.warn('[dsh-rolegroup] sidebarRight 服务不可用，「配置文件」按钮将无法打开右侧栏', error)
-  }
   // scope 面与旧 settings 作用域同形（getSnapshot/subscribe/mutate/unset），controller 逻辑零改动。
-  const controller = new RolegroupCardController(ctx.configForms.get(ROLEGROUP_CLIENT_NS), ctx, {
-    openConfigFile: (path) => openConfigFileInSidebar(sidebarRight, path),
-  })
+  const controller = new RolegroupCardController(ctx.configForms.get(ROLEGROUP_CLIENT_NS), ctx)
   // 注册为**设置页的一个 section**（`settings.section`；官方 models / agent-presets、第三方皮肤中心 / PET 同款），
   // 而**不是**插件页的 `plugins.item` 卡片。2026-10-15 用户拍板，理由两条：
   //   ① 角色表是**功能级配置**，放设置页（有自己的导航项）比塞进插件列表更像它该在的地方；

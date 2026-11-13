@@ -20,12 +20,10 @@ dsh 的**角色化委派插件**：角色 = 名字 + 绑定模型 + persona；�
 | `lib/config.js` | settings 条目 `Config`（schemastery）——命名空间的对外契约 |
 | `lib/settings-table.js` | section ↔ 文件配置的双向映射、跨字段校验 |
 | `lib/doctor.js` | 纯逻辑：快照读取/归一化、`auditRoles`、`renderDoctorText` |
-| `lib/config-info.js` | 「配置文件」查看器：当前配置快照纯函数 + 仅本机的只读 web 路由 |
 | `lib/command.js` | `/rolegroup` 命令面（doctor / init） |
-| `lib/init.js` | `/rolegroup init` 纯逻辑：按可用路由生成起始 jsonc、项目/用户路径、覆盖前备份与 `--diff` 摘要 |
+| `lib/init.js` | `/rolegroup init`：把当前生效绑定导出成 JSONC 文本（只打印，不落盘） |
 | `lib/startup-scheduler.js` | 剪枝防抖 + 最大等待上限 |
-| `lib/jsonc.js` | 带注释 JSON 解析 |
-| `src/client/` | 浏览器侧：`controller.js`（纯逻辑）、`card.jsx`（渲染）、`locales.js`（词典）、`meta.js`（版本/仓库元信息，版本由构建注入）、`config-file.js`（配置文件 → 右侧栏 Session 地址）、`settings-nav-icon.js`（设置页导航图标的 scoped CSS 装饰）、`index.js`（槽位注册） |
+| `src/client/` | 浏览器侧：`controller.js`（纯逻辑）、`card.jsx`（渲染）、`locales.js`（词典）、`meta.js`（版本/仓库元信息，版本由构建注入）、`settings-nav-icon.js`（设置页导航图标的 scoped CSS 装饰）、`index.js`（槽位注册） |
 | `lib/client.js` | **构建产物**（esbuild 打包 `src/client/`）——**不要手改** |
 | `locale/` | 插件元数据（`en.json` / `zh.json` 的 `meta.title` + `meta.description`）；`exports` 必须放行 `./locale/*.json`、`files` 必须含 `locale`，否则 dsh 的 `readPluginMeta` 解析不到 |
 
@@ -74,11 +72,9 @@ graph/team 运行时）。它有值得学的点（**能力矩阵进系统提示*
   —— `card.jsx` 里那一行 guard 就是为此保留的。
 - **接管判据必须是显式布尔位**：不能用"`roles` 数组是否为空"判断面板是否接管——schemastery 会把数组
   自动补成 `[]`，"字段缺省"与"显式空数组"在解析值上不可区分。
-- **层语义是「整层择一」，不是逐角色缝合**：jsonc 链「第一个命中即停」，面板 `enabled=true` 则**整层接管**——
-  `mergeRoles` 恒以内置表为底，所以接管后**只写在 jsonc 里、没搬进面板的角色会回落内置表**（jsonc 整层让位），
-  不是"沿用下层"。面板空覆盖表 = 不做任何覆盖 = 回到全部内置角色，故「零角色」不可表达。
-  README §4/§5 已按此写死；**别再写成「未列出的照旧沿用下层」**（2026-10-15 实测：这句会让用户以为
-  jsonc 覆盖还在生效，而它已被整层让位）。
+- **只有两层：内置表 + 面板覆盖**（v0.11 起）。`mergeRoles` 恒以内置表为底，面板 `enabled=true` 时
+  `roles[]` 覆盖内置表、没写的角色回落内置表；空覆盖表 = 回到全部内置角色，故「零角色」不可表达。
+  **配置文件层已删除**：不要再引入「读 jsonc / 层优先级 / 整层让位」这类概念，README §4 已按两层写死。
 - **dsh 0.2.1 起 `persona`/`toolFilter`/`backgroundMode` 被 tool-subagent 拒绝**（出现即 throw）；persona
   必须住 **Agent Preset**。而显式 `agentPreset` 是**替换**父组合（不选才 `composeFrom` 继承）——所以角色
   preset 必须**克隆默认 preset 的完整 rows**（`lib/presets.js`）；persona-only preset 会让角色子会话零工具/
@@ -112,8 +108,9 @@ graph/team 运行时）。它有值得学的点（**能力矩阵进系统提示*
   当前范围是 `>=0.2.1-rc.1`。
 - **内置链便宜档优先**：`deepseek-flash` → `deepseek-v4-pro`，v4-pro 只在 flash 不可用时兜底（额度价值判断：
   v4-pro 在 coding 榜排名低于 flash，且无专属订阅，不作为默认第一兜底）。
-- **备用链有硬约束：只能指向 `deepseek-official`**（唯一保证注册的 provider，`tests` 里有 `.every(...)` 断言）。
-  想加别的 provider 进链会直接红——这是可用性优先的既定取舍，不是笔误。
+- **备用链只能指向 dsh 自带的两个 DeepSeek provider**：`deepseek-account`（账号登录，**链首**）与
+  `deepseek-official`（API Key）。`tests` 里有断言锁着；加第三方网关进链会红。理由：别人的机器上不一定
+  注册这些 provider，而这两个随 dsh-base 一起安装。
 - **`vision` 角色（0.8.0）的选型与排除**：主路由 `qwen-token-plan-cn/qwen3.8-flash`，依据是两条独立证据
   （作者 omo 长期实践 + `scout-02` 子会话 OCR 10/10）。备用链只放 `deepseek-official/deepseek-flash`；
   **`MiniMax-M3` 必须排除**（同批 4/10 且编造内容）、**`v4-pro` 不放**（视觉未测）。上游没有视觉能力位，
@@ -137,21 +134,10 @@ graph/team 运行时）。它有值得学的点（**能力矩阵进系统提示*
   `modelCatalog.groups`（已注册 provider 清单）里；补齐目标 = `modelCatalog.default`，没有则第一个可用
   provider 的第一个模型；换模型会清掉旧 `reasoningEffort`（新模型未必支持）。写入仍走用户点「保存」，
   不要改成自动保存。
-- **`init` 必须先做层检查**（v0.6.3）：`installRolegroupCommands` 的 `describeLayer` 回调给出「现在生效的
-  是哪一层」。面板接管 → `--write` 拒绝（jsonc 整层让位）；项目级文件生效 → 用户级写入拒绝，提示改用
-  `--project`；`--force` 覆盖前会备份 `<path>.bak-<ts>`。别把这段检查删成"总是写"，否则会产出
-  「写成功但不生效」的文件。
-- **`init` 只覆盖「主路由不可用」的角色**：生成的 jsonc 是一份**显式**配置（写入的角色变 strict，
-  不再自动降级），所以每条都带上剩余备用链；完全没有可用路由的角色不写条目（空 provider 会让
-  `mergeRoles` 整条跳过），只留注释。落盘默认 `wx`（拒绝覆盖），`--force` 才 `w`。
-- **配置查看路由有暴露面，必须登记**（v0.7）：`GET|HEAD /api/dsh-rolegroup/config` 是**绕过 `/api`
-  认证层**的 loopback 只读路由（无认证）。安全性质靠三条：① handler 只返回**内存快照**、从不按
-  request URL/查询串读盘（无任意文件读/路径穿越，`tests/smoke.mjs` 的 v0.7/AC-10 用恶意查询串锁死）；
-  ② `isLoopbackAddress` 只放行 `127.0.0.0/8`、`::1`、`::ffff:127.0.0.1`；③ 非 GET/HEAD 一律 405。
-  **改动这条路由时**：不要引入任何「按参数读文件」的分支，不要放宽 loopback 判定，并保持
-  `x-content-type-options: nosniff`（防 JSON 被 `<script>` 引用执行）。新增任何本机路由都要在
-  README 的暴露面段落登记。
-- **配置不热生效**：快照只在启动剪枝终验时写一次；改配置需重启 + 开新会话。
+- **插件不注册任何 HTTP 路由**（v0.11 起）。之前那条只读的 `/api/dsh-rolegroup/config` 随配置文件层
+  一起删除；新增任何本机路由都要先想清楚暴露面并在 README 登记。
+- **`init` 只是导出器**：打印当前生效绑定的 JSONC 快照，不写文件、不接受 `--write/--project/--diff/--force`
+  （这些标志现在会被当作未知子命令）。
 - **provider 未注册的角色会被剪枝**（不注册、只记进 `invalid[]`）——但这条只对**显式配置**的角色成立：
   内置角色带备用链，会先降级到 `deepseek-official` 再谈剪枝（见上两条）。兜底角色尤其要留意：
   一条被剪枝的兜底路由等于不存在。
@@ -164,11 +150,10 @@ graph/team 运行时）。它有值得学的点（**能力矩阵进系统提示*
 - **客户端**经 `ctx.configForms.whileServed([ns], …)` 门控，往 `settings.section` 槽注册设置页一节
   （`label` = 导航名、`order` = 位置）；读写走 `ConfigFormController` 的
   `getSnapshot` / `subscribe` / `mutate`。
-- **四层优先级**（**整层择一**，见「容易踩的坑」）：settings 面板 > 项目 `rolegroup.jsonc` >
-  用户 `rolegroup.jsonc` > 内置表。
-- **未接管时编辑表由 host 只读快照预填**（`lib/config-info.js` 的 `effective.roles`，含 persona/summary/
-  reasoningEffort）；只有改动后保存才写 `enabled=true` + `roles`（显式接管）。接口不可用时降级为空覆盖表 +
-  手动新增（页内提示，不崩）。
+- **两层**：settings 面板（`enabled` + `roles`）> 内置表。没有文件层，也没有只读快照接口——未接管时
+  面板直接用客户端打包的 `DEFAULT_ROLES` 渲染，**不再请求宿主**（v0.11 删掉了那条 HTTP 路由）。
+- 面板接管时显示整张生效表（内置补全）；保存写 `enabled=true` + `roles`；「恢复官方推荐」写
+  `enabled=true` + `roles=[]`（零覆盖 = 内置表）。
 
 ## 开发流程
 

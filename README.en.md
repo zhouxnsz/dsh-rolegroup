@@ -7,7 +7,7 @@ instance, so the tool name is the role name.
 The role/category binding is inspired by
 [oh-my-openagent](https://github.com/code-yeongyu/oh-my-openagent) ("omo"); see §10.
 
-> Version **0.10.0** ｜ dsh **≥ 0.2.1-rc.1** (verified on 0.2.1-rc.3) ｜ MIT
+> Version **0.11.0** ｜ dsh **≥ 0.2.1-rc.1** (verified on 0.2.1-rc.3) ｜ MIT
 
 ---
 
@@ -105,12 +105,12 @@ dsh --profile web --dump-config | grep -A1 dsh-rolegroup   # should show - id: d
 Restart `dsh web` and open a new session. The eight role tools should be in the tool list; you can also run
 `/rolegroup doctor` from the new session.
 
-After changing code or `rolegroup.jsonc`, restart and open a new session. For panel saves, see §5.
+After changing code, restart and open a new session. For panel saves, see §5.
 
 ## 3. Built-in roles
 
 With no configuration, the plugin registers eight roles. The models below are initial values;
-`rolegroup.jsonc` or the panel can override them.
+the panel can override them.
 
 The table names models only: one model usually has several routes (subscription plan, pay-as-you-go, gateway),
 and the provider is up to your configuration. The built-in default points at the built-in table's providers (the
@@ -155,171 +155,97 @@ their fallback chain to `deepseek-official`; on a new machine run `/rolegroup in
 
 ## 4. Configuration
 
-### Lookup order
+Two layers only: the **built-in table** (factory defaults) and **panel overrides** (optional). There is no config
+file layer — as of v0.11 `rolegroup.jsonc` is no longer read at runtime, and `/rolegroup init` only exports the
+current bindings as text for your records.
 
-The plugin looks for config in this order and stops at the first hit:
+| State | Effective table |
+|---|---|
+| no overrides at all | the built-in table (= the recommendation in [MODELS.en.md](./MODELS.en.md)) |
+| panel takeover with N rows | those N rows override the built-in table; the others still use it |
 
-1. `<launch cwd>/.dsh/rolegroup.jsonc` (project-level)
-2. `$DSH_HOME/rolegroup.jsonc` (user-level; defaults to `~/.dsh`)
-3. none → built-in table (§3)
-
-### Format
-
-```jsonc
-// .dsh/rolegroup.jsonc; list only the roles you want to change
-{
-  "roles": {
-    "analyst": {
-      "provider": "qwen-token-plan-cn",          // optional; inherits the built-in provider
-      "model": "qwen3.8-flash",
-      "reasoningEffort": "medium",                // optional; omit to use the model default
-      "fallbackModels": ["deepseek-official/deepseek-flash"], // optional; tried in order when the primary is unavailable
-      "persona": "file://./personas/analyst.md",  // optional; file:// link (relative to this file) or inline
-      "summary": "Requirement clarification and plan review" // optional; one line
-    }
-  }
-}
-```
-
-The role name is the JSON key. Each role can set `provider`, `model`, `reasoningEffort` (optional),
-`fallbackModels` (optional), `persona` (optional), and `summary` (optional). `reasoningEffort` must be a level
-the model supports; leave it out to use the model default (see §5).
+Each row may set `provider`, `model`, `reasoningEffort` (optional), `fallbackModels` (optional), `persona`
+(optional) and `summary` (optional). `reasoningEffort` must be a level the model supports; leaving it empty uses
+the model default.
 
 ### Fallback chains
 
-Every built-in role bound to a provider other than `deepseek-official` carries a fallback chain, so a machine
-without a qwen or Kimi subscription still gets a working table:
+Built-in roles ship a chain that only targets the two DeepSeek providers dsh bundles: **`deepseek-account`
+(account login) first**, since that is what most users have, then `deepseek-official` (API key):
 
 ```jsonc
 "analyst": {
   "provider": "qwen-token-plan-cn",
   "model": "qwen3.8-max",
-  "fallbackModels": ["deepseek-official/deepseek-flash", "deepseek-official/deepseek-v4-pro"]
+  "fallbackModels": ["deepseek-account/deepseek-flash", "deepseek-official/deepseek-flash", "deepseek-official/deepseek-v4-pro"]
 }
 ```
 
-Built-in chains are **cheap-first** (`deepseek-flash` → `deepseek-v4-pro`); v4-pro is only the last resort when
-flash itself is unavailable. At startup the plugin takes the first route whose provider is registered and whose model is advertised
-(primary first, then the chain). A degraded role is called out in the startup log and by
-`/rolegroup doctor` (`⚠️ analyst: primary … unavailable, using built-in fallback …`).
+At startup the plugin walks "primary route → chain" and picks the first route whose provider is registered and
+whose model is advertised; a degraded pick is reported in the startup log and by `/rolegroup doctor`. Chains may
+not point at third-party gateways: those providers are not guaranteed to exist on someone else's machine.
 
-**Explicit configuration never degrades on its own**: once a role appears in your `rolegroup.jsonc` (or was
-saved from the panel), that route is executed as written. If it is unavailable the role is not registered and
-doctor prints an actionable hint. Add `fallbackModels` to that role yourself if you want a chain.
-
-For now chains are read from the config file only; the Settings panel does not edit them (and a panel save
-takes over the whole layer, so file chains do not carry over).
-
-### Precedence
-
-**Panel (settings layer) > project `rolegroup.jsonc` > user `rolegroup.jsonc` > built-in table.**
-
-One layer is chosen as a whole; layers are not merged role by role. If a layer exists, the layers below it are
-not read at all. The final table comes from the chosen layer, with the built-in table filling in missing
-roles.
-
-What this means in practice: saving in the panel takes over the whole table, and `rolegroup.jsonc` stops
-participating. A role that exists only in jsonc, and was not moved into the panel, falls back to the built-in
-table; it does not keep using jsonc. So:
-
-- Use jsonc or the panel, not both.
-- Before takeover, the panel pre-fills the active table. Saving takes over the whole layer; you do not need to
-  copy jsonc rows into the panel by hand.
-- To go back to jsonc, click "Reset to file config" in the panel (it clears `enabled` and `roles`).
-
-To see which layer is active, read the "config source" line from `/rolegroup doctor`.
+**Explicitly configured roles never degrade.** If you override a role and leave out `fallbackModels`, the plugin
+follows exactly what you wrote — when it is unavailable the role is not registered and doctor tells you why. Add
+the chain yourself if you want resilience.
 
 ### Runtime
 
-- At startup, routes are checked: the first route whose provider is registered and whose model is advertised
-  wins (primary, then the fallback chain). Built-in roles carry chains, so a machine without qwen / Kimi
-  subscriptions still runs; an **explicitly configured role never degrades** — an unregistered provider means
-  it is not registered, with a repair hint in the log and doctor. A model missing from the advertised list
-  only produces a warning; the role is still registered and delegation checks it again.
-- `maxDepth` is 1: the main session can delegate, role subagents cannot. Setting it to 0 also blocks
-  top-level delegation.
-  Implementation detail (measured, easy to misread): the role preset drops the **delegation group**, so
-  `subagent` / `subagent_fork` / `workflow` do not appear in child sessions. The eight **role tools** are
-  registered on the host plane, though, so they still show up in a child's tool list; calling one is
-  rejected at runtime by `maxDepth`. Upstream 0.2.1 removed `toolFilter`, so the plugin cannot hide host
-  tools from children — a known limitation (noise, not an escape).
-- Changes to `rolegroup.jsonc` are not hot-applied; restart and open a new session. Panel saves apply to new
-  sessions (see §5).
-- Chains resolve at **startup only**: a dsh role tool fixes its model when it is registered, so a chain picks
-  one route per start rather than switching at runtime like omo's 429 fallback; `llm/adapters-updated` makes
-  the plugin recompose and resolve again.
-- Delegation returns a subagent id immediately. You get a completion notice when the task finishes; no
-  polling.
+- `maxDepth` is 1: the main session can delegate, role subagents cannot. Setting it to 0 also blocks top-level
+  delegation. The role preset drops the delegation group, so children cannot see `subagent` / `workflow`; the
+  eight role tools are registered on the host plane and stay visible in a child's tool list, but calling one is
+  rejected by `maxDepth`. Upstream 0.2.1 removed `toolFilter`, so the plugin cannot hide host tools — known noise,
+  not an escape.
+- A panel save applies to new sessions; in-flight sessions are unaffected.
+- Chains are resolved at **startup only**: the role tool binds its model when it is registered, so there is no
+  runtime failover on 429. `llm/adapters-updated` makes the plugin recompose and resolve again.
+- Delegation returns a subagent id immediately; you get a notification when the task finishes.
 
-`readonly` is deprecated. If an old config still has it, you get a migration notice, but it does nothing. For
-read-only, use a session-level permission preset (`read-only` / `workspace-write` / `danger-full-access`,
-inherited by delegations); express a role's read-only lean in its persona.
+`readonly` is a retired field. If an old config still carries it you get a migration hint and it has no effect.
+Use session-level permission presets (`read-only` / `workspace-write` / `danger-full-access`, inherited by
+delegation) for read-only work; express a role's read-only tendency in its persona.
 
 ## 5. Settings panel
 
-Settings → 角色配置 edits roles and model bindings: add or remove roles, change provider/model,
-persona/summary, and reasoning effort. Save, Discard, and Reset to file config are at the bottom.
+Settings → 角色配置 edits roles and model bindings: add or remove roles, change provider/model, persona/summary
+and reasoning effort.
 
-When some roles name a provider that is not registered on this machine, the panel shows
-"N roles use a provider that is not registered" with a **Fill with available models** button: those rows are
-pointed at the deployment default route (or the first available model when there is no default). Only the draft
-changes — you still click Save.
-
-One line at the top of the panel says which layer is active — there are only three:
+One status line says which table is active — only two states:
 
 | State | Meaning |
 |---|---|
-| **Official defaults (built-in table)** | no overrides at all, or you clicked "Restore official defaults" (zero-override takeover) |
-| **File config** | no takeover; `rolegroup.jsonc` (project or user) is what applies |
-| **Panel overrides** | the panel took over and wrote N override rows |
+| **Official defaults (built-in table)** | no overrides at all |
+| **Panel overrides (N rows)** | the panel took over and wrote N rows |
 
-Four actions:
+Three actions:
 
 - **Save** — write the draft as panel overrides (`enabled=true` + the whole table).
 - **Discard** — drop the draft, change nothing.
 - **Restore official defaults** — zero-override takeover, so the effective table equals the built-in one. It
   writes **no model names**, so future changes to the shipped defaults are followed automatically.
-- **Back to file config** — exit takeover (clear `enabled` and `roles`) and fall back to `rolegroup.jsonc`.
-  **The outcome depends on whether a config file exists on your machine**, so the landing target is previewed
-  below the buttons: the file path when there is one, or "falls back to the built-in table" when there is not.
-  It is not the same thing as restoring the official defaults.
 
-If the read fails, the panel falls back to an empty table with manual add, an inline error and a retry.
+The panel shows the **whole effective table**: built-in roles missing from your overrides are filled in as normal
+rows carrying the built-in route and chain, and can be edited like any other row. Built-in rows have no remove
+button (removing one only reverts it to the built-in value); custom rows can be removed.
 
-**After takeover the panel shows the whole effective table**: built-in roles that are missing from your
-override table (for example, a role added by a later plugin version) are filled in as normal rows carrying the
-built-in route and fallback chain, and can be edited like any other row. Built-in rows have **no remove
-button** (because `mergeRoles` always seeds the built-in table, removing one only reverts it to the built-in
-default); custom rows can be removed.
+When a role's provider is not registered on this machine, the panel shows "N roles use a provider that is not
+registered" with a **Fill with available models** button that points those rows at the deployment default route
+(or the first available model when there is no default). The button is hidden when there is nothing to fill. It
+only edits the draft — you still click Save.
 
-Every row is saved **with its `fallbackModels`** (the panel does not offer an editor for it, but passes it
-through unchanged). That matters: a panel save is an explicit configuration, and explicit configurations do
-**not** inherit the built-in chain — dropping it would silently disable degradation (the role would be pruned
-when its primary route is unavailable).
+Every row is saved with its `fallbackModels` (the panel offers no editor for it, but passes it through). A panel
+save is an explicit configuration, and explicit configurations do not inherit the built-in chain — dropping it
+would silently disable degradation.
 
-The header shows the plugin name and version, plus a GitHub link. The Config file button opens the active
-`rolegroup.jsonc` in the right sidebar's document preview. It closes Settings first so the sidebar is visible.
-If there is no config file, it shows a one-line notice in the page instead of a popup. Host-side code changes
-need a `dsh web` restart.
+The header shows the plugin name, version and a GitHub link. Reasoning effort may be left empty to use the model
+default (Kimi K3 defaults to `high`); the dropdown comes from the model catalog, and unsupported values are
+flagged and block the save.
 
-> **Endpoint exposure (explicit)**: `GET|HEAD /api/dsh-rolegroup/config` — **loopback only, no authentication,
-> read-only**. It returns the **in-memory snapshot** read at startup (one of the project/user `rolegroup.jsonc`)
-> and **never reads files based on request parameters**, so there is no arbitrary-file-read or path-traversal
-> surface. Any process that can reach the local loopback can already read `~/.dsh`, so this endpoint widens no
-> trust boundary; in multi-user or untrusted-host setups, keep `dsh web` bound to loopback (the default).
-> Responses carry `nosniff`, so they cannot be executed via `<script>`.
+> **Exposed surface**: as of v0.11 the plugin registers **no HTTP routes at all**. The old read-only
+> `/api/dsh-rolegroup/config` endpoint was removed together with the config-file viewer, so the surface is zero.
 
-Reasoning effort can be left empty, which means the model's default (Kimi K3, for example, defaults to
-`high`). A higher level is usually slower and more expensive, but it reasons more thoroughly. The dropdown options come from
-the model catalog and only include levels the model supports. An unsupported value is marked red and blocks
-saving; switching models clears an old level the new model does not support.
-
-Panel saves apply to new sessions; in-flight sessions are not affected. `rolegroup.jsonc` still needs a
-restart and a new session.
-
-You cannot disable the plugin by emptying the panel. `mergeRoles` always seeds the built-in table, so an empty
-override table means "back to the eight built-in roles." To disable it, uninstall the plugin or remove its
-install entry.
+Clearing the panel does not disable the plugin: `mergeRoles` always seeds the built-in table, so an empty override
+table means "back to the eight built-in roles". To disable it, uninstall the plugin or remove its install entry.
 
 ## 6. Diagnostics
 
@@ -329,20 +255,12 @@ available, with repair hints when something is wrong. When a built-in fallback i
 ("primary X unavailable, using built-in fallback Y").
 
 - `/rolegroup doctor`: diagnose.
-- `/rolegroup init`: print a starter config that overrides only the roles whose primary route is unavailable
-  on this machine (nothing is written) and show the active layer (panel / project jsonc / user jsonc / built-in).
-- `/rolegroup init --write`: write the user-level `$DSH_HOME/rolegroup.jsonc`; refuses to overwrite, and
-  **refuses while the panel has taken over or a project-level config exists** — a file written then would not
-  be read.
-- `/rolegroup init --write --project`: write the project-level `<cwd>/.dsh/rolegroup.jsonc`; warns when the
-  user-level file is the active layer and would be shadowed.
-- `/rolegroup init --diff`: list which roles in the existing file would be replaced or dropped (the generated
-  file replaces the whole file).
-- `/rolegroup init --write --force`: overwrite, after backing the existing file up to `<path>.bak-<timestamp>`.
+- `/rolegroup init`: export the **current effective bindings** as JSONC text (printed, nothing written). As of
+  v0.11 it is a record/comparison tool only — `rolegroup.jsonc` is no longer a configuration source.
 - Bare `/rolegroup` or an unknown subcommand: print usage.
 
-> On a fresh machine, run `/rolegroup init` first to see which routes actually work, then decide whether to
-> `--write`. The generated file overrides only the unavailable roles and keeps each fallback chain.
+> On a fresh machine, run `/rolegroup doctor` first to see which roles' primary routes are unavailable; change
+> bindings in the panel.
 
 Note: pasting text starting with `/` into the GUI composer sends it as a normal message, not a command. Type
 it by hand or pick it from the completion list.
@@ -351,12 +269,11 @@ Example:
 
 > If a role's provider is not registered, an error block is appended below the table and the provider is
 > marked ❌. The role is not registered. This matters most for a fallback role: a skipped fallback route does
-> not exist. The built-in fallback is bound to `deepseek-official` because that provider is always
-> registered:
+> not exist. Built-in fallbacks point at dsh's own DeepSeek providers, which ship with every install:
 
 ```
 ❌ fallback：provider "example-provider" 当前未注册（在用：deepseek-official, kimi-coding, qwen-token-plan-cn）
-   修复：① 检查该适配器的 key/额度；② 或在 rolegroup.jsonc 把 fallback 改用已注册 provider。
+   修复：① 检查该适配器的 key/额度；② 或在面板里把 fallback 改用已注册 provider。
 ```
 
 ```
@@ -428,8 +345,7 @@ the official plugin manager or the Plugin Market it appears under "Installed", w
 They are generated by this plugin (one per role: copy of the default mode composition, persona replaced,
 delegation group removed). Do not delete or rename them, and do not pick one for a main session. A deleted
 preset makes the role fail the health audit on the next start or reload; selecting a role preset for a main
-session gives you a session without the standard tools. Edit role config through the panel or
-`rolegroup.jsonc`.
+session gives you a session without the standard tools. Edit role config through the panel.
 
 **Why doesn't a subagent/sub-session show its model?**
 The subagent UI has no dedicated model chip. Rolegroup puts the model into two existing fields: the Agent
@@ -458,15 +374,6 @@ mode, there is no difference.
 ① Check that `--dump-config` shows `- id: dsh-rolegroup`; ② restart `dsh web` and open a new session
 (neither code nor config is hot-applied); ③ run `/rolegroup doctor` to see whether a role was skipped because
 its provider is not registered.
-
-**The panel says "not taken over yet" or the read failed?**
-While not taken over, the panel pre-fills the effective table; it degrades to an empty table only when the
-read fails, with an inline error and a retry button. Save is only available after an edit.
-
-**I edited `rolegroup.jsonc` and nothing changed?**
-First check whether the panel has taken over (§4: with `enabled=true`, jsonc yields entirely, so a reload
-changes nothing). If it has, click "Reset to file config" in the panel. If it has not, config is simply not
-hot-applied: restart and open a new session.
 
 **`/rolegroup` does nothing?**
 Pasting text starting with `/` into the GUI composer sends it as an ordinary message. Type it by hand or pick

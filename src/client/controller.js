@@ -14,7 +14,6 @@ import { DEFAULT_ROLES, TOOL_NAME_RE } from '../../lib/roles.js'
  * 「当前配置」只读接口：host 侧 lib/config-info.js 注册同一路径
  * （smoke suite 有断言锁两端一致）。客户端只读，不写任何东西。
  */
-const CONFIG_ENDPOINT = '/api/dsh-rolegroup/config'
 
 /** 可经 editRole 文本编辑的字段（toolName 走专门的重命名路径）。v0.5：readonly 已移除。 */
 const TEXT_FIELDS = ['provider', 'model', 'reasoningEffort', 'persona', 'summary']
@@ -132,22 +131,13 @@ export class RolegroupCardController {
     this.catalogDefault = undefined // modelCatalog.default（部署默认路由，用于一键补齐）
     this.catalogPartial = false
     this.catalogStatus = 'idle'
-    // 「配置文件」按钮：status = idle|loading|error；notice = undefined|'noFile'。
-    this.config = { status: 'idle', error: undefined, notice: undefined }
-    // 未接管时的预填数据：来自 host 快照的当前生效表（jsonc / 内置表）。
-    // source: 'panel' | 'file' | 'builtin'（host 快照 active）；landing: 退回文件层时的落点
-    this.effective = { status: 'idle', roles: [], error: undefined, source: undefined, landing: undefined }
     this.lastTakeover = this.scope.getSnapshot().value?.enabled === true
     this.saveGeneration = 0
     this.catalogGeneration = 0
-    this.configGeneration = 0
-    this.effectiveGeneration = 0
     this.disposed = false
     this.store = createSnapshotStore(() => this.projection(), () => {
       // catalog 懒加载：卡片展开（组件首次订阅）且 idle 时才拉取
       if (this.catalogStatus === 'idle') this.loadCatalog()
-      // 当前生效表预填：未接管且还没拉过时懒加载（卡片展开才请求）
-      if (!this.isTakeover() && this.effective.status === 'idle') void this.loadEffective()
     })
     this.unsubscribeScope = scope.subscribe(() => this.onScopeChange())
   }
@@ -162,11 +152,8 @@ export class RolegroupCardController {
       save: () => { this.save() },
       discard: () => this.discard(),
       restoreOfficial: () => { this.restoreOfficial() },
-      exitToFile: () => { this.exitToFile() },
       retryCatalog: () => this.retryCatalog(),
       fillUnavailableRoutes: () => this.fillUnavailableRoutes(),
-      retryEffective: () => this.retryEffective(),
-      openConfig: () => this.openConfig(),
     }
   }
 
@@ -175,8 +162,6 @@ export class RolegroupCardController {
     this.disposed = true
     this.saveGeneration += 1
     this.catalogGeneration += 1
-    this.configGeneration += 1
-    this.effectiveGeneration += 1
     this.unsubscribeScope?.()
     this.store.clear()
   }
@@ -199,7 +184,8 @@ export class RolegroupCardController {
     // 备用链）。否则新增内置角色对老用户彻底隐身（v0.8 vision 的真实反馈）。
     if (snapshot.value?.enabled === true) return fillBuiltinRows(panelRows)
     if (panelRows.length > 0) return panelRows
-    return this.effective.status === 'ready' ? this.effective.roles : []
+    // 未接管 = 没有任何覆盖 → 生效表就是内置表（客户端已打包 DEFAULT_ROLES，不用请求宿主）
+    return fillBuiltinRows([])
   }
 
   draftRows() {
@@ -229,11 +215,6 @@ export class RolegroupCardController {
   editable() {
     const snapshot = this.scope.getSnapshot()
     if (this.disposed || this.saving || snapshot.status !== 'ready' || snapshot.writable !== true) return false
-    // 预填尚未就绪（idle/loading）时禁止编辑：避免用户先加了行、预填随后到达把草稿基准换掉。
-    // error 仍允许手动新增（旧行为兜底），卡片会给出保存警示；面板层已有行时不需要预填。
-    const panelRows = Array.isArray(snapshot.value?.roles) ? snapshot.value.roles : []
-    const needsPrefill = !this.isTakeover() && panelRows.length === 0
-    if (needsPrefill && this.effective.status !== 'ready' && this.effective.status !== 'error') return false
     return true
   }
 
@@ -248,12 +229,7 @@ export class RolegroupCardController {
       if (serializeRows(this.effectiveRows()) === serializeRows(this.draftRows())) this.clearDraft()
       else this.conflicted = true
     }
-    // 接管状态变化：退出接管（重置/他处清空）后必须重新读取文件/内置生效表。
-    const takeover = this.isTakeover()
-    if (takeover !== this.lastTakeover) {
-      this.lastTakeover = takeover
-      if (!takeover && this.effective.status !== 'loading') void this.loadEffective()
-    }
+    this.lastTakeover = this.isTakeover()
     this.publish()
   }
 
@@ -425,121 +401,7 @@ export class RolegroupCardController {
       { op: 'set', path: ['roles'], value: [] },
     ])
     if (this.disposed) return
-    if (this.effective.status !== 'loading') void this.loadEffective()
     this.publish()
-  }
-
-  /**
-   * 回到文件配置：退出面板接管（unset enabled/roles），回落到 jsonc 链；没有 jsonc 才等于内置表。
-   * 与 `restoreOfficial` 是两件事——这个动作的结果取决于用户机器上有没有配置文件。
-   */
-  async exitToFile() {
-    if (this.disposed || this.saving) return
-    if (this.scope.getSnapshot().writable !== true) return
-    if (!this.isTakeover()) return // 未接管时点了没意义：禁用（card 侧也按此禁用）
-    this.clearDraft()
-    this.publish()
-    await this.scope.mutate([
-      { op: 'unset', path: ['enabled'] },
-      { op: 'unset', path: ['roles'] },
-    ])
-    if (this.disposed) return
-    // ⚠️ 这里**不能**再判 isTakeover()：重置瞬间客户端快照可能还是 enabled=true，
-    // 那个 guard 会跳过刷新，面板继续显示旧表（2026-11-13 用户实测踩到）。
-    if (this.effective.status !== 'loading') void this.loadEffective()
-    this.publish()
-  }
-
-  // --- 配置文件按钮 ---
-  /**
-   * 拉取当前配置快照，取 host 给出的配置文件绝对路径，交给右侧栏文档预览打开。
-   * 成功返回 true（卡片随后关闭设置弹窗以露出右侧栏）；无文件/右侧栏不可用/接口失败返回 false，
-   * 并把可显示的 notice/error 留在投影里。渲染全部在设置页内联，不弹窗。
-   */
-  async openConfig() {
-    if (this.disposed || this.config.status === 'loading') return false
-    const generation = ++this.configGeneration
-    this.config.status = 'loading'
-    this.config.error = undefined
-    this.config.notice = undefined
-    this.publish()
-    try {
-      const payload = await this.fetchConfigInfo()
-      if (generation !== this.configGeneration || this.disposed) return false
-      if (payload?.ok !== true) throw new Error(payload?.error?.message ?? 'config info unavailable')
-      const path = payload?.file?.path
-      if (typeof path !== 'string' || path === '') {
-        this.config.status = 'idle'
-        this.config.notice = 'noFile'
-        this.publish()
-        return false
-      }
-      const opened = this.options?.openConfigFile?.(path) === true
-      if (!opened) throw new Error('sidebar unavailable')
-      this.config.status = 'idle'
-      this.publish()
-      return true
-    } catch (error) {
-      if (generation !== this.configGeneration || this.disposed) return false
-      this.config.status = 'error'
-      this.config.error = String(error?.message ?? error)
-      this.publish()
-      return false
-    }
-  }
-
-  /**
-   * 同源 fetch；测试可经 options.fetch 注入。
-   * 注意：绝不能读 `ctx.fetch`——cordis 对未 inject 的服务属性会抛
-   * “cannot get property \"fetch\" without inject”（真机实测）。fetch 不是 cordis 服务。
-   */
-  async fetchConfigInfo() {
-    const fetchImpl = this.options?.fetch ?? globalThis.fetch
-    if (typeof fetchImpl !== 'function') throw new Error('fetch unavailable')
-    const response = await fetchImpl(CONFIG_ENDPOINT, {
-      cache: 'no-store',
-      headers: { accept: 'application/json' },
-    })
-    if (!response?.ok) throw new Error(`HTTP ${response?.status ?? '?'}`)
-    return await response.json()
-  }
-
-  // --- 当前生效表预填 ---
-  /** 拉取 host 快照里的当前生效表（未接管时预填编辑表）；迟到响应按 generation 丢弃。 */
-  async loadEffective() {
-    if (this.disposed || this.effective.status === 'loading') return
-    const generation = ++this.effectiveGeneration
-    this.effective.status = 'loading'
-    this.effective.error = undefined
-    this.publish()
-    try {
-      const payload = await this.fetchConfigInfo()
-      if (generation !== this.effectiveGeneration || this.disposed) return
-      if (payload?.ok !== true) throw new Error(payload?.error?.message ?? 'config info unavailable')
-      const roles = payload?.effective?.roles
-      this.effective.roles = Array.isArray(roles) ? roles : []
-      this.effective.source = typeof payload?.active === 'string' ? payload.active : undefined
-      // 「回到文件配置」的落点预告：快照里有文件就落到它，没有就落内置表。
-      const filePath = typeof payload?.file?.path === 'string' ? payload.file.path : undefined
-      this.effective.landing = filePath === undefined ? { kind: 'builtin' } : { kind: 'file', path: filePath }
-      this.effective.status = 'ready'
-    } catch (error) {
-      if (generation !== this.effectiveGeneration || this.disposed) return
-      this.effective.status = 'error'
-      this.effective.error = String(error?.message ?? error)
-    }
-    this.publish()
-  }
-
-  retryEffective() {
-    if (this.disposed || this.effective.status === 'loading') return
-    void this.loadEffective()
-  }
-
-  // --- catalog ---
-  retryCatalog() {
-    if (this.disposed || this.catalogStatus === 'loading') return
-    this.loadCatalog()
   }
 
   async loadCatalog() {
@@ -622,14 +484,10 @@ export class RolegroupCardController {
       /** 面板是否已接管生效表（host 侧 Config.enabled）。未接管时 rows 来自 host 快照预填，
        *  不是空表；saving 后由本面板接管。 */
       takeover,
-      /** 三态：official = 跟随官方推荐（零覆盖/无配置）；file = 使用 jsonc；custom = 面板自定义覆盖。 */
-      mode: takeover
-        ? ((snapshot.value?.roles ?? []).length > 0 ? 'custom' : 'official')
-        : (this.effective.status !== 'ready'
-          ? 'loading'
-          : (this.effective.source === 'builtin' ? 'official' : 'file')),
-      /** 「回到文件配置」的落点预告（有 jsonc → 文件；没有 → 内置表）。 */
-      landing: this.effective.landing,
+      /** 两态：official = 跟随官方推荐（零覆盖/无配置）；custom = 面板自定义覆盖。 */
+      mode: takeover && (snapshot.value?.roles ?? []).length > 0 ? 'custom' : 'official',
+      /** 覆盖行数（面板自定义时用于状态行显示）。 */
+      overrides: (snapshot.value?.roles ?? []).length,
       dirty: this.isDirty(),
       saving: this.saving,
       failed: this.failed,
@@ -638,16 +496,6 @@ export class RolegroupCardController {
       catalog: { status: this.catalogStatus, groups: this.mergedGroups(rows), partial: this.catalogPartial },
       /** provider 未注册的行（catalog 就绪才计算）。 */
       routeGaps: this.routeGapsOf(this.drafts !== undefined ? this.draftRows() : rows),
-      /** 预填状态：未接管时由 host 快照提供 jsonc / 内置生效表。 */
-      effective: {
-        /** 未接管且面板层还没有行：编辑必须先等 host 生效表预填到达（否则草稿基准是空表）。 */
-        required: !takeover && (snapshot.value?.roles ?? []).length === 0,
-        status: takeover ? 'ready' : this.effective.status,
-        error: takeover ? undefined : this.effective.error,
-        prefilled: !takeover && this.effective.status === 'ready',
-      },
-      /** 「配置文件」按钮的瞬时状态：loading / error / noFile notice。 */
-      config: { ...this.config },
       basePresent: Array.isArray(snapshot.base?.roles),
     }
   }
