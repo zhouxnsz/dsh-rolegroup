@@ -3393,12 +3393,19 @@ ok('client-card: card.jsx 全文无硬编码 CJK——所有文案走 t()（v0.3
   assert.equal(hits, null, `card.jsx 不得出现 CJK 字符（命中 ${hits?.length} 处，如 ${hits?.slice(0, 5)?.join('')}）——文案一律走 t()`)
 })
 
-ok('client-card: 去掉设置页外框，角色列表不设固定滚动高度——滚动交给设置页（layout/AC-1）', () => {
+ok('client-card: 头部与状态行固定，列表在独立容器里滚动（layout/AC-1，v0.11.1 反转旧决策）', () => {
+  // 2026-10-21 曾把滚动交给设置页；2026-11-13 用户截图反馈：角色一多，状态行被整页滚走。
+  // 现在照官方设置页的形态（agent-preset）：根容器 flex 列 + height:100%，内容区 flex:1 自己滚。
   const card = readFileSync(fileURLToPath(new URL('../src/client/card.jsx', import.meta.url)), 'utf8')
   assert.ok(!/\.dsh-rg-card\{[^}]*border/.test(card), 'dsh-rg-card 不得再有外框')
   assert.ok(!/\.dsh-rg-card\{[^}]*padding/.test(card), 'dsh-rg-card 不得再留外框内边距')
-  assert.ok(!/\.dsh-rg-rows\{[^}]*max-height/.test(card), '角色列表不得再设固定高度')
-  assert.ok(!/\.dsh-rg-rows\{[^}]*overflow/.test(card), '角色列表不得再套一层滚动')
+  assert.ok(/\.dsh-rg-card\{[^}]*display:flex[^}]*flex-direction:column/.test(card), '根容器必须是 flex 列，才能让内层占满剩余高度')
+  assert.ok(/\.dsh-rg-card\{[^}]*height:100%/.test(card), '根容器必须撑满设置页给的高度')
+  assert.ok(/\.dsh-rg-scroll\{[^}]*overflow-y:auto/.test(card), '内容区必须有独立纵向滚动')
+  assert.ok(/\.dsh-rg-scroll\{[^}]*min-height:0/.test(card), 'flex 子项必须 min-height:0，否则滚动不生效')
+  assert.ok(!/\.dsh-rg-scroll\{[^}]*max-height:\s*\d/.test(card), '不得用固定像素高度（换屏幕/字号就坏）')
+  assert.ok(card.includes('className="dsh-rg-scroll"'), '列表区必须真的包在滚动容器里')
+  assert.ok(card.includes('className="dsh-rg-footer"'), '动作区必须在滚动容器外（否则会被一起滚走）')
 })
 
 await okAsync('client-bundle: 重建产物仍满足 wrapper 形状且内联 v0.4 注册痕迹（v0.4/AC-17）', async () => {

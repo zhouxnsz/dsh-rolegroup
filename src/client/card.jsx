@@ -9,7 +9,12 @@
 
 import { PLUGIN_REPO_URL, PLUGIN_VERSION } from './meta.js'
 
-const CSS = '.dsh-rg-card{display:grid;gap:10px}'
+const CSS = '.dsh-rg-card{display:flex;flex-direction:column;height:100%;min-height:0;gap:10px}'
+  // Header and status line stay put; the list scrolls on its own. Same shape as the official
+  // settings pages (agent-preset etc.) — otherwise a long list scrolls the status line away
+  // (user screenshot feedback, 2026-11-13).
+  + '.dsh-rg-scroll{flex:1;min-height:0;overflow-y:auto;display:grid;gap:10px;align-content:start;padding-right:4px}'
+  + '.dsh-rg-footer{display:grid;gap:6px;flex:none}'
   + '.dsh-rg-headBlock{min-width:0}'
   + '.dsh-rg-head{display:flex;justify-content:space-between;align-items:center;gap:8px 16px;flex-wrap:wrap}'
   + '.dsh-rg-titleRow{display:flex;align-items:baseline;gap:8px;min-width:0;flex-wrap:wrap}'
@@ -304,25 +309,28 @@ export function RolegroupCard(props) {
           </p>
         </details>
       </div>
-      {(state.routeGaps ?? []).length > 0 ? (
-        <div className="dsh-rg-gapNotice" role="status">
-          <span>{state.routeGaps.length} {t('routeGapNotice')}</span>
-          <button type="button" disabled={disabled} onClick={props.fillUnavailableRoutes}>
-            {t('fillRoutes')}
-          </button>
+      <div className="dsh-rg-scroll">
+        {(state.routeGaps ?? []).length > 0 ? (
+          <div className="dsh-rg-gapNotice" role="status">
+            <span>{state.routeGaps.length} {t('routeGapNotice')}</span>
+            <button type="button" disabled={disabled} onClick={props.fillUnavailableRoutes}>
+              {t('fillRoutes')}
+            </button>
+          </div>
+        ) : null}
+        {state.failed ? <p className="dsh-rg-alert" role="alert">{t('saveFailed')}</p> : null}
+        {state.conflicted ? <p className="dsh-rg-alert" role="status">{t('conflicted')}</p> : null}
+        <div className="dsh-rg-rows">
+          {state.rows.length === 0
+            ? <p className="dsh-rg-empty">{state.takeover ? t('emptyTakeover') : t('emptyNotTakeover')}</p>
+            : state.rows.map(renderRow)}
         </div>
-      ) : null}
-      {state.failed ? <p className="dsh-rg-alert" role="alert">{t('saveFailed')}</p> : null}
-      {state.conflicted ? <p className="dsh-rg-alert" role="status">{t('conflicted')}</p> : null}
-      <div className="dsh-rg-rows">
-        {state.rows.length === 0
-          ? <p className="dsh-rg-empty">{state.takeover ? t('emptyTakeover') : t('emptyNotTakeover')}</p>
-          : state.rows.map(renderRow)}
-      </div>
 
-      <button type="button" className="dsh-rg-add" disabled={disabled} onClick={props.addRole}>
-        + {t('addRole')}
-      </button>
+        <button type="button" className="dsh-rg-add" disabled={disabled} onClick={props.addRole}>
+          + {t('addRole')}
+        </button>
+      </div>
+      <div className="dsh-rg-footer">
       <div className="dsh-rg-actions">
         <button type="button" className="dsh-rg-save" disabled={disabled || !state.dirty} onClick={props.save}>
           {t('save')}
@@ -337,6 +345,7 @@ export function RolegroupCard(props) {
         </button>
       </div>
       <p className="dsh-rg-liveHint">{t('liveHint')}</p>
+      </div>
     </div>
   )
 }
