@@ -123,6 +123,22 @@ them in the panel. Model ids and the effective routes are whatever `/rolegroup d
 See **[MODELS.en.md](./MODELS.en.md)** for the recommended model per role. "Recommended" and "built-in default"
 can differ — `reviewer` is one.
 
+### Delegation quality
+
+Roles do not inherit the parent's context; the more specific the brief, the more usable the result. The
+plugin gives the main model a fixed template in the system prompt:
+
+- A brief should state: background, goal, constraints, acceptance, known facts (`file:line`), claims to verify;
+- Factual conclusions must land on `file:line`; quote verbatim, and treat quotes you cannot reproduce as
+  `UNVERIFIED`;
+- Do not prescribe the expected verdict distribution ("should be all true / should find problems"). In our
+  2026-11-16 comparison this wording made `analyst` mark five partially-true claims as all `TRUE` and
+  fabricate quotes; the neutral arm quoted the source accurately;
+- A subagent's conclusion is input, not a verdict. Spot-check quotes; do not adopt a confident report that
+  cannot show evidence.
+
+Route fact-checking to `reviewer` / `scout`, design judgement to `analyst`, implementation to `coder`.
+
 ## 4. Configuration
 
 Two layers: the built-in table (factory defaults) and panel overrides (optional).
@@ -135,7 +151,7 @@ Built-in roles ship a chain that only targets the two DeepSeek providers dsh bun
 ```jsonc
 "analyst": {
   "provider": "qwen-token-plan-cn",
-  "model": "qwen3.8-max",
+  "model": "qwen4-max",
   "fallbackModels": ["deepseek-account/deepseek-flash", "deepseek-official/deepseek-flash", "deepseek-official/deepseek-v4-pro"]
 }
 ```
@@ -178,7 +194,7 @@ dsh-rolegroup doctor — 8 个在册角色
 快照时间 2026-10-25T12:00:00.000Z（0 天前）｜配置来源 (内置默认表)
 
 角色     绑定模型                         provider 模型
-analyst  qwen-token-plan-cn/qwen3.8-max   ✅       ✅
+analyst  qwen-token-plan-cn/qwen4-max    ✅       ✅
 planner  kimi-coding/k3.1-pro             ✅       ✅
 coder    kimi-coding/k3.1-pro             ✅       ✅
 reviewer qwen-token-plan-cn/qwen3.8-flash ✅       ✅

@@ -8,6 +8,21 @@
 
 ---
 
+## [Unreleased]
+
+### Changed
+
+- `analyst` 的内置绑定从 `qwen3.8-max` 升到 `qwen4-max`：2026-11-16 provider 已上架，价格低于 3.8-max；
+  同日原始 API 预对照（同 5 条事实命题）qwen4-max 的 completion token / 耗时约为 3.8-max 的 1/6–1/10，
+  判定校准同级。正式 harness 对照待新会话补测。
+- 角色委派方法论：`analyst` / `reviewer` / `scout` 的 persona 增加核验纪律（逐字引用、`UNVERIFIED`、
+  `PARTIAL` 与 `FALSE` 的区分）；`roleAnnouncement` 增加简报模板、父 agent 规范（子任务结论是输入不是裁决）
+  和角色分流（事实核验 → reviewer/scout，设计判断 → analyst，实现 → coder）。
+- 依据：2026-11-16 的四臂对照。同一 `analyst` 下，中性简报逐字准确；加了“如果全真就说 5/5 TRUE”的简报
+  把 5 条部分成立的命题全判 `TRUE` 并编造引用。完整记录在内部评测档案，不随仓库公开。
+
+---
+
 ## [0.11.7] — 2026-11-13
 
 发布前把文档过了一遍，清掉最后几处"旧世界"残留（都不影响行为）。

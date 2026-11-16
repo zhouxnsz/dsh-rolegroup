@@ -114,6 +114,18 @@ dsh --profile web --dump-config | grep -A1 dsh-rolegroup   # 应出现 - id: dsh
 
 各角色的官方推荐模型见 **[MODELS.md](./MODELS.md)**。表里「推荐」与「内置默认」可能不同，比如 `reviewer`。
 
+### 委派质量
+
+角色不继承父会话上下文，简报越具体，返回越可用。插件在系统提示里给主模型一段固定模板：
+
+- 简报至少写：背景、目标、约束、验收、已知事实（文件:行号）、待核验命题；
+- 事实性结论必须能落到文件:行号；引用逐字，无法复现的按 `UNVERIFIED` 处理；
+- 不要预设结论分布（不要写「应该全真/应该有问题」）。2026-11-16 的对照里，这句话让 `analyst` 把 5 条
+  部分成立的命题全判 `TRUE` 并编造引用；中性简报的那一组逐字准确；
+- 子任务结论是输入，不是裁决；主模型要抽查引用，重结论轻证据的回报不要直接采纳。
+
+事实核验优先 `reviewer` / `scout`，设计判断用 `analyst`，实现用 `coder`。
+
 ## 4. 配置
 
 配置有两层：内置表（出厂默认）和面板覆盖（可选）。
@@ -126,7 +138,7 @@ dsh --profile web --dump-config | grep -A1 dsh-rolegroup   # 应出现 - id: dsh
 ```jsonc
 "analyst": {
   "provider": "qwen-token-plan-cn",
-  "model": "qwen3.8-max",
+  "model": "qwen4-max",
   "fallbackModels": ["deepseek-account/deepseek-flash", "deepseek-official/deepseek-flash", "deepseek-official/deepseek-v4-pro"]
 }
 ```
@@ -163,7 +175,7 @@ dsh-rolegroup doctor — 8 个在册角色
 快照时间 2026-10-25T12:00:00.000Z（0 天前）｜配置来源 (内置默认表)
 
 角色     绑定模型                         provider 模型
-analyst  qwen-token-plan-cn/qwen3.8-max   ✅       ✅
+analyst  qwen-token-plan-cn/qwen4-max    ✅       ✅
 planner  kimi-coding/k3.1-pro             ✅       ✅
 coder    kimi-coding/k3.1-pro             ✅       ✅
 reviewer qwen-token-plan-cn/qwen3.8-flash ✅       ✅

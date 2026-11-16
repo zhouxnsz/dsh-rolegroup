@@ -170,7 +170,7 @@ ok('buildInstanceConfig: dsh 0.2.1 形状 —— agentPreset 成对 + maxDepth:1
     provider: 'spawn',
     toolName: 'analyst',
     modelSelectionSettings: false,
-    agentOptions: { provider: 'qwen-token-plan-cn', model: 'qwen3.8-max' },
+    agentOptions: { provider: 'qwen-token-plan-cn', model: 'qwen4-max' },
     agentPreset: 'rolegroup-analyst',
     allowedAgentPresets: ['rolegroup-analyst'],
     maxDepth: 1, // 顶层可委派、角色不可再委派（resolveChildDepth 语义实证）
@@ -243,6 +243,48 @@ ok('roleAnnouncement: 包含每个角色与模型 + 0.2.1 委派语义（v0.6/A1
   assert.ok(text.includes('立即返回'), '必须说明委派立即返回 subagent id')
   assert.ok(text.includes('完成通知') || text.includes('完成时收到通知'), '必须说明完成通知语义')
   assert.ok(text.includes('description') && text.includes('子任务标题'), '必须要求 description 带模型并说明它会显示为子任务标题')
+})
+
+// --- v0.12：委派方法论（plans/v0.12-delegation-methodology.md）---
+// 2026-11-16 四臂对照：简报里写“如果全真就说 5/5 TRUE”会让 analyst 把 5 条部分成立的命题
+// 全判 TRUE 并编造引用；中性简报的 A 臂逐字准确。故公告必须要求“不要预设结论分布”，
+// 并要求事实性结论可落到文件:行号。
+ok('roleAnnouncement: 简报模板 / 中立纪律 / 父 agent 规范（v0.12）', () => {
+  const { roles } = mergeRoles(undefined)
+  const text = roleAnnouncement(roles)
+  for (const needle of ['已知事实', '待核验命题', '不要预设结论分布', 'UNVERIFIED', '子任务结论是输入']) {
+    assert.ok(text.includes(needle), `公告缺少方法论关键词：${needle}\n${text}`)
+  }
+  for (const needle of ['事实核验优先 reviewer/scout', '设计判断用 analyst', '实现用 coder']) {
+    assert.ok(text.includes(needle), `公告缺少角色分流：${needle}\n${text}`)
+  }
+})
+
+ok('roles: analyst / reviewer / scout 含核验纪律（v0.12）', () => {
+  const { roles } = mergeRoles(undefined)
+  const by = Object.fromEntries(roles.map((r) => [r.toolName, r]))
+  for (const name of ['analyst', 'reviewer', 'scout']) {
+    const persona = by[name].persona
+    assert.ok(persona.includes('UNVERIFIED'), `${name} persona 必须允许 UNVERIFIED：${persona}`)
+    assert.ok(persona.includes('逐字') || persona.includes('原文'), `${name} persona 必须要求逐字引用：${persona}`)
+  }
+  assert.ok(by.analyst.persona.includes('PARTIAL') && by.analyst.persona.includes('FALSE'),
+    'analyst 必须区分 PARTIAL / FALSE')
+  assert.ok(by.analyst.persona.includes('压成 TRUE'), 'analyst 必须禁止把 PARTIAL 压成 TRUE')
+  assert.ok(by.reviewer.persona.includes('PARTIAL') && by.reviewer.persona.includes('FALSE'),
+    'reviewer 必须区分 PARTIAL / FALSE')
+  assert.ok(by.reviewer.persona.includes('压成 TRUE'), 'reviewer 必须禁止把 PARTIAL 压成 TRUE')
+  assert.ok(by.reviewer.persona.includes('全真'), 'reviewer 必须允许“全真”')
+  assert.ok(by.scout.persona.includes('前后 10 行'), 'scout 必须要求读 cited line 上下文')
+  assert.ok(by.scout.persona.includes('语境限定'), 'scout 必须处理带语境限定的命题')
+})
+
+ok('roles: 自定义角色缺省 persona 含可核验要求（v0.12）', () => {
+  const { roles } = mergeRoles({ roles: { custom_role: { provider: 'deepseek-official', model: 'deepseek-flash' } } })
+  const custom = roles.find((r) => r.toolName === 'custom_role')
+  assert.ok(custom, '自定义角色应被合并')
+  assert.ok(custom.persona.includes('UNVERIFIED'), `自定义角色缺省 persona 必须含 UNVERIFIED：${custom.persona}`)
+  assert.ok(custom.persona.includes('文件:行号'), `自定义角色缺省 persona 必须要求文件:行号：${custom.persona}`)
 })
 
 console.log(`\n${passed} passed`)
@@ -1005,7 +1047,7 @@ ok('doctor: auditRoles 内置角色缺席快照 → missingDefaults 提示级 �
   assert.equal(withoutScout.registered.length, BUILTIN_COUNT - 1, '删掉 scout 后剩内置角色数 - 1')
   const providers = ['qwen-token-plan-cn', 'kimi-coding', 'deepseek-official', 'example-provider']
   const modelsByProvider = {
-    'qwen-token-plan-cn': ['qwen3.8-max', 'qwen3.8-flash'],
+    'qwen-token-plan-cn': ['qwen4-max', 'qwen3.8-max', 'qwen3.8-flash'],
     'kimi-coding': ['k3', 'k3.1-pro'],
     'deepseek-official': ['deepseek-flash'],
     "example-provider": ['example-model'],
@@ -1482,7 +1524,7 @@ ok('settings-table: rolesToSection 内置表 → 7 项、首项 analyst 四字�
   const first = section.roles[0]
   assert.equal(first.toolName, 'analyst')
   assert.equal(first.provider, 'qwen-token-plan-cn')
-  assert.equal(first.model, 'qwen3.8-max')
+  assert.equal(first.model, 'qwen4-max')
   assert.ok(!('readonly' in first), 'v0.5 起 section 不得再带 readonly')
   assert.ok(typeof first.persona === 'string' && first.persona.length > 0, 'persona 必须带出')
   assert.ok(typeof first.summary === 'string' && first.summary.length > 0, 'summary 必须带出')
@@ -1834,7 +1876,7 @@ await okAsync('compose 重构等价性：启动快照字段形状与 registered 
     assert.equal(report.registered.length, BUILTIN_COUNT)
     assert.deepEqual(report.registered.map((r) => r.toolName), Object.keys(DEFAULT_ROLES))
     // v0.5：registered[] 不再带 readonly（红线 3 的显式例外，见 lib/index.js writeReport）
-    assert.deepEqual(report.registered[0], { toolName: 'analyst', provider: 'qwen-token-plan-cn', model: 'qwen3.8-max' })
+    assert.deepEqual(report.registered[0], { toolName: 'analyst', provider: 'qwen-token-plan-cn', model: 'qwen4-max' })
     for (const entry of report.registered) assert.deepEqual(Object.keys(entry).sort(), ['model', 'provider', 'toolName'])
     assert.deepEqual(report.failed, [])
     assert.deepEqual(report.invalid, [])
@@ -2739,7 +2781,7 @@ ok('controller: 投影初始态——available/writable 取自 scope、rows=生�
   const first = proj.rows[0]
   assert.equal(first.toolName, 'analyst')
   assert.equal(first.provider, 'qwen-token-plan-cn')
-  assert.equal(first.model, 'qwen3.8-max')
+  assert.equal(first.model, 'qwen4-max')
   assert.ok(!('readonly' in first), 'v0.5 起投影行不得再带 readonly')
   assert.ok(typeof first.persona === 'string' && first.persona.length > 0, 'persona 必须投影')
   assert.ok(typeof first.summary === 'string' && first.summary.length > 0, 'summary 必须投影')
@@ -2844,7 +2886,7 @@ await okAsync('controller: catalog 懒加载 + 合并——ready/partial、已�
   assert.ok(kimi.models.some((m) => m.id === 'k3' && m.available === true), '目录内路由必须标 available:true')
   const qwen = proj.catalog.groups.find((g) => g.id === 'qwen-token-plan-cn')
   assert.ok(qwen, '已存 provider 不在目录时必须保留该组（不静默丢配置）')
-  assert.ok(qwen.models.some((m) => m.id === 'qwen3.8-max' && m.available === false), JSON.stringify(qwen))
+  assert.ok(qwen.models.some((m) => m.id === 'qwen4-max' && m.available === false), JSON.stringify(qwen))
   assert.ok(notices.length >= 1, '投影变化必须通知订阅者')
 })
 
