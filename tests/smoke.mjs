@@ -10,7 +10,7 @@ import { execFileSync } from 'node:child_process'
 import { createPruneScheduler } from '../lib/startup-scheduler.js'
 import { auditRoles, editDistance, normalizeReport, readStartupReport, renderDoctorText, startupReportPath } from '../lib/doctor.js'
 import { CONFIG_AGE_HINT_DAYS } from '../lib/doctor.js'
-import { installRolegroupCommands, parseRolegroupCommand, runDoctor } from '../lib/command.js'
+import { buildRgDirective, createRgUserMessage, installRolegroupCommands, isSubagentSession, parseRolegroupCommand, runDoctor } from '../lib/command.js'
 import { __setTestOverrides, apply } from '../lib/index.js'
 import {
   DEFAULT_ROLES,
@@ -658,6 +658,12 @@ ok('command: parseRolegroupCommand 子命令解析，不做前缀模糊匹配（
   // 自 v0.11 起 init 只是导出器：旧标志一律视为未知子命令（不许静默忽略）
   assert.deepEqual(parseRolegroupCommand('init --write'), { kind: 'unknown', sub: 'init --write' })
   assert.deepEqual(parseRolegroupCommand('init --force'), { kind: 'unknown', sub: 'init --force' })
+  // v0.13：work 子命令保留完整任务文本（含空格）
+  assert.deepEqual(parseRolegroupCommand('work 分析 X'), { kind: 'work', task: '分析 X' })
+  assert.deepEqual(parseRolegroupCommand('  work   分析 X  '), { kind: 'work', task: '分析 X' })
+  assert.deepEqual(parseRolegroupCommand('work'), { kind: 'usage' })
+  assert.deepEqual(parseRolegroupCommand('work   '), { kind: 'usage' })
+  assert.deepEqual(parseRolegroupCommand('workfoo'), { kind: 'unknown', sub: 'workfoo' })
 })
 
 // --- /rolegroup init：按本机可用路由生成起始配置（layer 2）---
@@ -681,22 +687,24 @@ await okAsync('command: /rolegroup init 只导出绑定文本、不写任何文�
   const prevHome = process.env.DSH_HOME
   process.env.DSH_HOME = tmp
   try {
-    let captured
-    const fakeCommands = { list: () => [], register: (definition) => { captured = definition; return () => {} } }
+    const defs = []
+    const fakeCommands = { list: () => [], register: (definition) => { defs.push(definition); return () => {} } }
     const llm = {
       listProviders: () => [{ id: 'deepseek-official' }],
       listModels: async () => [{ id: 'deepseek-flash' }, { id: 'deepseek-v4-pro' }],
     }
     const fakeCtx = { get: (n) => (n === 'commands' ? fakeCommands : n === 'llm' ? llm : undefined), effect: (fn) => fn(), logger: { warn: () => {} } }
     installRolegroupCommands(fakeCtx)
+    assert.deepEqual(defs.map((d) => d.name).sort(), ['rg', 'rolegroup'], '必须同时注册短/长命令')
+    const rolegroup = defs.find((d) => d.name === 'rolegroup')
 
-    const printed = await captured.handler({ rawInput: 'init' })
+    const printed = await rolegroup.handler({ rawInput: 'init' })
     assert.equal(printed.kind, 'success', printed.text)
     assert.ok(printed.text.includes('"analyst"'), '导出必须含角色')
     assert.ok(printed.text.includes('不再作为配置来源'), '导出文本必须说明它只是参考')
     assert.equal(existsSync(join(tmp, 'rolegroup.jsonc')), false, 'init 不得写任何配置文件')
 
-    const unknown = await captured.handler({ rawInput: 'init --write' })
+    const unknown = await rolegroup.handler({ rawInput: 'init --write' })
     assert.equal(unknown.kind, 'error', '旧的 --write 必须报未知，不许静默忽略')
   } finally {
     if (prevHome === undefined) delete process.env.DSH_HOME
@@ -714,11 +722,11 @@ ok('command: installRolegroupCommands 无 commands 服务时不抛、只 warn（
 })
 
 ok('command: 注册元数据 name/description/input.hint，无 attachments，注册包在 ctx.effect 内（AC-18）', () => {
-  let captured
+  const defs = []
   let effectUsed = false
   const fakeCommands = {
     list: () => [],
-    register: (def) => { captured = def; return () => {} },
+    register: (def) => { defs.push(def); return () => {} },
   }
   const fakeCtx = {
     get: (n) => (n === 'commands' ? fakeCommands : undefined),
@@ -727,26 +735,49 @@ ok('command: 注册元数据 name/description/input.hint，无 attachments，注
   }
   installRolegroupCommands(fakeCtx)
   assert.ok(effectUsed, '注册必须包在 ctx.effect 里（H12 生命周期回收）')
-  assert.equal(captured.name, 'rolegroup')
-  assert.ok(typeof captured.description === 'string' && captured.description.length > 0 && captured.description.length <= 80, captured.description)
-  assert.equal(captured.input?.hint, '[doctor|init]')
-  assert.equal(captured.input?.attachments, undefined)
-  assert.equal(typeof captured.handler, 'function')
+  const rolegroup = defs.find((d) => d.name === 'rolegroup')
+  const rg = defs.find((d) => d.name === 'rg')
+  assert.ok(rolegroup, '必须注册 /rolegroup')
+  assert.ok(rg, '必须注册 /rg')
+  assert.ok(typeof rolegroup.description === 'string' && rolegroup.description.length > 0 && rolegroup.description.length <= 80, rolegroup.description)
+  assert.equal(rolegroup.input?.hint, '[doctor|init|work]')
+  assert.equal(rolegroup.input?.attachments, undefined)
+  assert.equal(typeof rolegroup.handler, 'function')
+  assert.ok(typeof rg.description === 'string' && rg.description.length > 0 && rg.description.length <= 80, rg.description)
+  assert.equal(rg.input?.hint, '<任务描述>')
+  assert.equal(rg.input?.attachments, undefined)
+  assert.equal(typeof rg.handler, 'function')
 })
 
-ok('command: 同名命令已存在时 warn 并放弃注册，不抢占（RK1）', () => {
+ok('command: /rolegroup 同名命令已存在时放弃长命令，但 /rg 仍注册（RK1 扩展）', () => {
   const warnings = []
-  let registerCalled = false
+  const defs = []
   const fakeCtx = {
     get: (n) => (n === 'commands' ? {
       list: () => [{ name: 'rolegroup' }],
-      register: () => { registerCalled = true; return () => {} },
+      register: (def) => { defs.push(def); return () => {} },
     } : undefined),
     effect: (fn) => fn(),
     logger: { warn: (m) => warnings.push(m) },
   }
   assert.doesNotThrow(() => installRolegroupCommands(fakeCtx))
-  assert.equal(registerCalled, false)
+  assert.deepEqual(defs.map((d) => d.name), ['rg'], '/rolegroup 被占用时不得抢占，短命令仍可注册')
+  assert.equal(warnings.length, 1)
+})
+
+ok('command: /rg 同名命令已存在时放弃短命令，/rolegroup 长命令仍注册（RK1 扩展）', () => {
+  const warnings = []
+  const defs = []
+  const fakeCtx = {
+    get: (n) => (n === 'commands' ? {
+      list: () => [{ name: 'rg' }],
+      register: (def) => { defs.push(def); return () => {} },
+    } : undefined),
+    effect: (fn) => fn(),
+    logger: { warn: (m) => warnings.push(m) },
+  }
+  assert.doesNotThrow(() => installRolegroupCommands(fakeCtx))
+  assert.deepEqual(defs.map((d) => d.name), ['rolegroup'], '短命令被占用时不得抢占，长命令仍可注册')
   assert.equal(warnings.length, 1)
 })
 
@@ -754,7 +785,7 @@ ok('command: apply 时 commands 未激活 → ctx.inject 延迟注册（2026-09-
   // 复现宿主时序：get('commands') strict 模式只返活动 fiber 的实现，dsh-commands
   // 晚于本插件就绪时 apply 拿到 undefined。修法：ctx.inject(['commands'], cb) 待就绪。
   let injectCb
-  let captured
+  const defs = []
   const fakeCtx = {
     get: () => undefined, // apply 时尚未激活
     inject: (deps, cb) => { assert.deepEqual(deps, ['commands']); injectCb = cb },
@@ -764,11 +795,93 @@ ok('command: apply 时 commands 未激活 → ctx.inject 延迟注册（2026-09-
   assert.equal(typeof injectCb, 'function', '未激活时必须走 ctx.inject 通道而不是 warn 放弃')
   // 宿主稍后就绪，回调拿到带 commands 的子 ctx
   injectCb({
-    commands: { list: () => [], register: (def) => { captured = def; return () => {} } },
+    commands: { list: () => [], register: (def) => { defs.push(def); return () => {} } },
     effect: (fn) => fn(),
     logger: { warn: () => {} },
   })
-  assert.equal(captured?.name, 'rolegroup')
+  assert.deepEqual(defs.map((d) => d.name).sort(), ['rg', 'rolegroup'])
+})
+
+// --- v0.13：/rg 命令 ---
+function makeRgCommands() {
+  const defs = []
+  const commands = {
+    list: () => [],
+    register: (def) => { defs.push(def); return () => {} },
+  }
+  const ctx = {
+    get: (n) => (n === 'commands' ? commands : undefined),
+    effect: (fn) => fn(),
+    logger: { warn: () => {} },
+  }
+  installRolegroupCommands(ctx)
+  return { rg: defs.find((d) => d.name === 'rg'), rolegroup: defs.find((d) => d.name === 'rolegroup') }
+}
+
+await okAsync('command: /rg 消息构造、root-only、取消、空任务（v0.13）', async () => {
+  const { rg, rolegroup } = makeRgCommands()
+  assert.ok(rg && rolegroup, '必须同时拿到短/长命令')
+  const calls = []
+  const rootAgent = { session: { header: {} }, followup: (m) => calls.push(m) }
+  const signal = new AbortController().signal
+
+  const okResult = await rg.handler({ rawInput: '  分析 X  ', agent: rootAgent, signal })
+  assert.equal(okResult.kind, 'success', okResult.text)
+  assert.equal(calls.length, 1)
+  const msg = calls[0]
+  assert.equal(msg.role, 'user')
+  assert.ok(typeof msg.id === 'string' && msg.id.length > 0, '消息必须有非空 id')
+  assert.equal(msg.source.kind, 'rolegroup', '不得用 user source，避免被当成直接人类请求')
+  assert.equal(msg.source.command, 'rg')
+  assert.ok(Array.isArray(msg.content) && msg.content[0]?.type === 'text')
+  assert.ok(msg.content[0].text.includes('分析 X'), msg.content[0].text)
+  assert.ok(msg.content[0].text.includes('在册的角色'), msg.content[0].text)
+  for (const name of ['analyst', 'coder', 'reviewer']) {
+    assert.ok(!msg.content[0].text.includes(`\`${name}\``), `指令不得点名角色（会被剪枝/过期）：${name}`)
+  }
+
+  const empty = await rg.handler({ rawInput: '   ', agent: rootAgent, signal })
+  assert.equal(empty.kind, 'error')
+  assert.equal(calls.length, 1, '空任务不得注入')
+
+  const aborted = new AbortController()
+  aborted.abort()
+  const cancelled = await rg.handler({ rawInput: '分析 X', agent: rootAgent, signal: aborted.signal })
+  assert.equal(cancelled.kind, 'error')
+  assert.equal(calls.length, 1, '已取消不得注入')
+
+  const childAgent = { session: { header: { origin: 'subagent', delegationDepth: 1 } }, followup: (m) => calls.push(m) }
+  const child = await rg.handler({ rawInput: '分析 X', agent: childAgent, signal })
+  assert.equal(child.kind, 'error')
+  assert.ok(child.text.includes('仅主会话'), child.text)
+  assert.equal(calls.length, 1, '子会话不得注入')
+
+  const work = await rolegroup.handler({ rawInput: 'work 任务 A', agent: rootAgent, signal })
+  assert.equal(work.kind, 'success', work.text)
+  assert.equal(calls.length, 2)
+  assert.ok(calls[1].content[0].text.includes('任务 A'))
+})
+
+ok('command: /rg 纯函数——directive 不点名角色、message 形状、子会话判据（v0.13）', () => {
+  const directive = buildRgDirective('任务 B')
+  assert.ok(directive.includes('任务 B'))
+  assert.ok(directive.includes('在册的角色'))
+  for (const name of ['analyst', 'planner', 'coder', 'reviewer', 'scout', 'scribe', 'vision', 'fallback']) {
+    assert.ok(!directive.includes(`\`${name}\``), `directive 不得点名 ${name}`)
+  }
+
+  const msg = createRgUserMessage('任务 C', () => 'fixed-id')
+  assert.equal(msg.id, 'fixed-id')
+  assert.equal(msg.role, 'user')
+  assert.equal(msg.source.kind, 'rolegroup')
+  assert.ok(msg.content[0].text.includes('任务 C'))
+
+  assert.equal(isSubagentSession(undefined), false)
+  assert.equal(isSubagentSession({}), false)
+  assert.equal(isSubagentSession({ parentSession: 'x' }), false, '普通 fork 不是 subagent')
+  assert.equal(isSubagentSession({ origin: 'subagent' }), true)
+  assert.equal(isSubagentSession({ delegationDepth: 1 }), true)
+  assert.equal(isSubagentSession({ delegationDepth: 0 }), false)
 })
 
 await okAsync('command: runDoctor 端到端（假 llm）：去重后 provider 各查一次（RK2），输出含表格', async () => {

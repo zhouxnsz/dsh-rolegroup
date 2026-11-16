@@ -95,6 +95,19 @@ dsh --profile web --dump-config | grep -A1 dsh-rolegroup   # should show - id: d
 Restart `dsh web` and open a new session. The eight role tools should be in the tool list; you can also run
 `/rolegroup doctor` from the new session.
 
+### Delegate by role
+
+Type:
+
+```
+/rg <task>
+```
+
+The plugin injects the task plus a "delegate by role" directive into the main session; the main model then
+picks from the roles registered on this machine, writes briefs, and dispatches. `/rolegroup work <task>` is
+the long alias. `/rg` is main-session only — child sessions get an error. It only triggers; whether to
+dispatch is still the main model's call.
+
 After changing code, restart and open a new session. For panel saves, see §5.
 
 ## 3. Built-in roles

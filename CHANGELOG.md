@@ -10,11 +10,13 @@
 
 ## [Unreleased]
 
+### Added
+
+- 新增 `/rg <任务>` 命令（`/rolegroup work <任务>` 长别名）：向主会话注入一条
+  `source.kind='rolegroup'` 的委派指令；只主会话可用，子会话拒绝；不点名具体角色，按在册公告选择。
+
 ### Changed
 
-- `analyst` 的内置绑定从 `qwen3.8-max` 升到 `qwen4-max`：2026-11-16 provider 已上架，价格低于 3.8-max；
-  同日原始 API 预对照（同 5 条事实命题）qwen4-max 的 completion token / 耗时约为 3.8-max 的 1/6–1/10，
-  判定校准同级。正式 harness 对照待新会话补测。
 - 角色委派方法论：`analyst` / `reviewer` / `scout` 的 persona 增加核验纪律（逐字引用、`UNVERIFIED`、
   `PARTIAL` 与 `FALSE` 的区分）；`roleAnnouncement` 增加简报模板、父 agent 规范（子任务结论是输入不是裁决）
   和角色分流（事实核验 → reviewer/scout，设计判断 → analyst，实现 → coder）。
