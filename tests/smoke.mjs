@@ -170,7 +170,7 @@ ok('buildInstanceConfig: dsh 0.2.1 形状 —— agentPreset 成对 + maxDepth:1
     provider: 'spawn',
     toolName: 'analyst',
     modelSelectionSettings: false,
-    agentOptions: { provider: 'qwen-token-plan-cn', model: 'qwen4-max' },
+    agentOptions: { provider: 'qwen-token-plan-cn', model: 'qwen3.8-max' },
     agentPreset: 'rolegroup-analyst',
     allowedAgentPresets: ['rolegroup-analyst'],
     maxDepth: 1, // 顶层可委派、角色不可再委派（resolveChildDepth 语义实证）
@@ -1524,7 +1524,7 @@ ok('settings-table: rolesToSection 内置表 → 7 项、首项 analyst 四字�
   const first = section.roles[0]
   assert.equal(first.toolName, 'analyst')
   assert.equal(first.provider, 'qwen-token-plan-cn')
-  assert.equal(first.model, 'qwen4-max')
+  assert.equal(first.model, 'qwen3.8-max')
   assert.ok(!('readonly' in first), 'v0.5 起 section 不得再带 readonly')
   assert.ok(typeof first.persona === 'string' && first.persona.length > 0, 'persona 必须带出')
   assert.ok(typeof first.summary === 'string' && first.summary.length > 0, 'summary 必须带出')
@@ -1876,7 +1876,7 @@ await okAsync('compose 重构等价性：启动快照字段形状与 registered 
     assert.equal(report.registered.length, BUILTIN_COUNT)
     assert.deepEqual(report.registered.map((r) => r.toolName), Object.keys(DEFAULT_ROLES))
     // v0.5：registered[] 不再带 readonly（红线 3 的显式例外，见 lib/index.js writeReport）
-    assert.deepEqual(report.registered[0], { toolName: 'analyst', provider: 'qwen-token-plan-cn', model: 'qwen4-max' })
+    assert.deepEqual(report.registered[0], { toolName: 'analyst', provider: 'qwen-token-plan-cn', model: 'qwen3.8-max' })
     for (const entry of report.registered) assert.deepEqual(Object.keys(entry).sort(), ['model', 'provider', 'toolName'])
     assert.deepEqual(report.failed, [])
     assert.deepEqual(report.invalid, [])
@@ -2781,7 +2781,7 @@ ok('controller: 投影初始态——available/writable 取自 scope、rows=生�
   const first = proj.rows[0]
   assert.equal(first.toolName, 'analyst')
   assert.equal(first.provider, 'qwen-token-plan-cn')
-  assert.equal(first.model, 'qwen4-max')
+  assert.equal(first.model, 'qwen3.8-max')
   assert.ok(!('readonly' in first), 'v0.5 起投影行不得再带 readonly')
   assert.ok(typeof first.persona === 'string' && first.persona.length > 0, 'persona 必须投影')
   assert.ok(typeof first.summary === 'string' && first.summary.length > 0, 'summary 必须投影')
@@ -2886,7 +2886,7 @@ await okAsync('controller: catalog 懒加载 + 合并——ready/partial、已�
   assert.ok(kimi.models.some((m) => m.id === 'k3' && m.available === true), '目录内路由必须标 available:true')
   const qwen = proj.catalog.groups.find((g) => g.id === 'qwen-token-plan-cn')
   assert.ok(qwen, '已存 provider 不在目录时必须保留该组（不静默丢配置）')
-  assert.ok(qwen.models.some((m) => m.id === 'qwen4-max' && m.available === false), JSON.stringify(qwen))
+  assert.ok(qwen.models.some((m) => m.id === 'qwen3.8-max' && m.available === false), JSON.stringify(qwen))
   assert.ok(notices.length >= 1, '投影变化必须通知订阅者')
 })
 
