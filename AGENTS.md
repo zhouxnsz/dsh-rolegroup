@@ -23,7 +23,7 @@ dsh 的**角色化委派插件**：角色 = 名字 + 绑定模型 + persona；�
 | `lib/command.js` | `/rolegroup` 命令面（doctor / init / work）与短命令 `/rg` |
 | `lib/init.js` | `/rolegroup init`：把当前生效绑定导出成 JSONC 文本（只打印，不落盘） |
 | `lib/startup-scheduler.js` | 剪枝防抖 + 最大等待上限 |
-| `src/client/` | 浏览器侧：`controller.js`（纯逻辑）、`card.jsx`（渲染）、`locales.js`（词典）、`meta.js`（版本/仓库元信息，版本由构建注入）、`settings-nav-icon.js`（设置页导航图标的 scoped CSS 装饰）、`index.js`（槽位注册） |
+| `src/client/` | 浏览器侧：`controller.js`（纯逻辑）、`card.jsx`（渲染）、`locales.js`（词典）、`meta.js`（版本/仓库元信息，版本由构建注入）、`settings-nav-icon.js`（设置页导航图标，官方 `settings.section.icon` 槽位）、`index.js`（槽位注册） |
 | `lib/client.js` | **构建产物**（esbuild 打包 `src/client/`）——**不要手改** |
 | `locale/` | 插件元数据（`en.json` / `zh.json` 的 `meta.title` + `meta.description`）；`exports` 必须放行 `./locale/*.json`、`files` 必须含 `locale`，否则 dsh 的 `readPluginMeta` 解析不到 |
 
@@ -100,9 +100,9 @@ graph/team 运行时）。它有值得学的点（**能力矩阵进系统提示*
   （`presetDisplayName` → header 角色标签显示 `角色：scout · deepseek-flash`）和 **subagent label**
   （`roleAnnouncement` 要求父模型把 `provider/model` 写进 `description`）；根治仍需上游 UI 显示 descriptor
   或提供 slot。
-- **设置页导航图标没有 slot 入参**：shell 按 section id 硬编码 `navIcon`，未知 id 一律齿轮。客户端用
-  `settings-nav-icon.js` 给「角色配置」按钮打 `data-dsh-rg-nav`，再用 scoped CSS mask 换成 rolegroup
-  线稿；shell 改结构或浏览器不支持 mask 时自动退回齿轮，不影响设置页。**不要**改成替换 React 子节点。
+- **设置页导航图标走官方 `settings.section.icon` 槽位**（0.2.2-rc.5 起）：registration id 必须等于目标
+  section 的 id，缺席时 shell 保留默认齿轮。旧版「打 data-dsh-rg-nav + scoped CSS mask」的装饰 hack 已退役
+  （上游当时没有 icon 槽位）。icon 注册在 apply 期直接做、不受 whileServed 门控；React 取不到时返回 null。
 - **`engines.dsh` 的 semver 坑**：`>=0.2.1` **不包含** `0.2.1-rc.2`（prerelease 被排除）。插件市场/
   插件管理器按 `engines.dsh` 判兼容，写错会让插件卡片直接显示「异常」并跳过 meta（连图标都不读）。
   当前范围是 `>=0.2.1-rc.1`。

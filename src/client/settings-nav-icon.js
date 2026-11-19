@@ -1,92 +1,54 @@
-// Best-effort decoration for the Settings sidebar entry.
+// dsh-rolegroup: 设置页导航图标（官方 `settings.section.icon` 槽位版）。
 //
-// The settings shell renders one nav button per `settings.section` entry but
-// picks its glyph from a hardcoded id map; unknown ids (ours) get the gear and
-// `settings.section` exposes no icon option. To show the rolegroup mark there we
-// tag only our own button and swap the glyph through scoped CSS, without
-// touching React's child list. If the shell structure or mask support changes,
-// the decoration does nothing and the default gear remains.
+// 历史：0.2.2-rc.5 之前 shell 只按 section id 硬编码 navIcon、未知 id 一律齿轮，本模块曾是
+// 「给按钮打自定义 data 属性 + scoped CSS mask」的装饰 hack（旧版见 git 历史）。
+// rc.5 起上游提供 `settings.section.icon` 槽位（contract/slots.d.ts:85；registration id 必须
+// 等于目标 section 的 id，不匹配则永不渲染；缺席时 shell 保留默认齿轮），故改为正式注册。
+//
+// 纯函数约束：本文件不得触碰 DOM（document/window/observer 一类）——node 测试直接 import。
 
-const NAV_GLYPH = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M8 1.7 13.4 4.8v6.4L8 14.3 2.6 11.2V4.8Z" fill="none" stroke="#000" stroke-width="1.2" stroke-linejoin="round"/><circle cx="8" cy="8" r="1.35" fill="#000"/><path d="M8 6.4V4.7M6.7 8.7 5.3 9.5M9.3 8.7 10.7 9.5" stroke="#000" stroke-width="1.2" stroke-linecap="round"/></svg>'
-const NAV_GLYPH_URI = `data:image/svg+xml,${encodeURIComponent(NAV_GLYPH)}`
-
-export const NAV_ICON_CSS = `@supports ((mask-image: linear-gradient(#000, #000)) or (-webkit-mask-image: linear-gradient(#000, #000))) {
-button[data-dsh-rg-nav] > svg { display: none !important; }
-button[data-dsh-rg-nav]::before { content: ""; width: 16px; height: 16px; flex: none; display: inline-block; background-color: currentColor; -webkit-mask: url("${NAV_GLYPH_URI}") center / 16px 16px no-repeat; mask: url("${NAV_GLYPH_URI}") center / 16px 16px no-repeat; }
-}`
+/** rolegroup 线稿（与插件 icon.svg 同款六边形+委派点），16×16 viewBox。 */
+export const NAV_GLYPH_PATHS = [
+  'M8 1.7 13.4 4.8v6.4L8 14.3 2.6 11.2V4.8Z',
+  'M8 6.4V4.7M6.7 8.7 5.3 9.5M9.3 8.7 10.7 9.5',
+]
+export const NAV_GLYPH_CIRCLE = { cx: 8, cy: 8, r: 1.35 }
 
 /**
- * Tag the settings nav button whose visible label matches.
- * @param {Iterable<{ textContent?: string, dataset?: DOMStringMap, firstElementChild?: Element, setAttribute?: Function }>} buttons
- * @param {string} label
- * @returns {object | undefined} the tagged button
+ * 构建导航图标节点（喂给 slots.register 的组件）。
+ * @param {{ size?: number }} [props] shell 传入的 owner props（size = 请求的方形边长 px）
+ * @returns {{ tag: string, props: object, children: object[] }} 可序列化的图标描述（JSX-free，node 可测）
  */
-export function markSettingsNavButton(buttons, label) {
-  const wanted = String(label ?? '').trim()
-  if (wanted === '') return undefined
-  for (const button of buttons ?? []) {
-    if (button?.dataset?.dshRgNav !== undefined) return button
-    if (String(button?.textContent ?? '').trim() !== wanted) continue
-    if (String(button?.firstElementChild?.tagName ?? '').toLowerCase() !== 'svg') continue
-    if (button.dataset !== undefined) button.dataset.dshRgNav = ''
-    else button.setAttribute?.('data-dsh-rg-nav', '')
-    return button
+export function buildNavGlyph(props = {}) {
+  const size = typeof props.size === 'number' && props.size > 0 ? props.size : 16
+  return {
+    tag: 'svg',
+    props: {
+      xmlns: 'http://www.w3.org/2000/svg',
+      viewBox: '0 0 16 16',
+      width: size,
+      height: size,
+      fill: 'none',
+      stroke: 'currentColor',
+      strokeWidth: 1.2,
+      strokeLinejoin: 'round',
+      strokeLinecap: 'round',
+      'aria-hidden': 'true',
+    },
+    children: [
+      { tag: 'path', props: { d: NAV_GLYPH_PATHS[0] } },
+      { tag: 'circle', props: { ...NAV_GLYPH_CIRCLE, fill: 'currentColor', stroke: 'none' } },
+      { tag: 'path', props: { d: NAV_GLYPH_PATHS[1] } },
+    ],
   }
-  return undefined
 }
 
 /**
- * Watch the document for the settings nav button and apply the scoped glyph.
- * @param {() => string} labelOf current localized section label
- * @param {{ document?: Document, MutationObserver?: typeof MutationObserver, requestAnimationFrame?: Function }} [options]
- * @returns {() => void} cleanup
+ * 把图标描述渲染成真 React 节点（仅在浏览器侧调用；node 测试不触发）。
+ * @param {object} React globalThis.React（client 注入环境必有）
+ * @param {ReturnType<typeof buildNavGlyph>} glyph
  */
-export function installSettingsNavIcon(labelOf, options = {}) {
-  const doc = options.document ?? (typeof document === 'undefined' ? undefined : document)
-  if (doc === undefined || doc === null || doc.body === undefined || doc.body === null) return () => {}
-  const root = doc.head ?? doc.documentElement
-  if (typeof root?.append !== 'function') return () => {}
-  const style = doc.createElement('style')
-  style.setAttribute('data-dsh-rg-nav-style', '')
-  style.textContent = NAV_ICON_CSS
-  try {
-    root.append(style)
-  } catch {
-    return () => {}
-  }
-  const Observer = options.MutationObserver ?? globalThis.MutationObserver
-  const raf = options.requestAnimationFrame ?? globalThis.requestAnimationFrame
-  let scheduled = false
-  let disposed = false
-  const apply = () => {
-    scheduled = false
-    if (disposed) return
-    try {
-      markSettingsNavButton(doc.querySelectorAll?.('button') ?? [], labelOf?.())
-    } catch {
-      // Decoration only; never let it affect the settings page.
-    }
-  }
-  const schedule = () => {
-    if (scheduled || disposed) return
-    scheduled = true
-    if (typeof raf === 'function') raf(apply)
-    else Promise.resolve().then(apply)
-  }
-  let observer
-  if (typeof Observer === 'function') {
-    try {
-      observer = new Observer(schedule)
-      observer.observe(doc.body, { childList: true, subtree: true })
-    } catch {
-      observer = undefined
-    }
-  }
-  apply()
-  return () => {
-    disposed = true
-    observer?.disconnect?.()
-    style.remove?.()
-    for (const button of doc.querySelectorAll?.('[data-dsh-rg-nav]') ?? []) button.removeAttribute?.('data-dsh-rg-nav')
-  }
+export function renderNavGlyph(React, glyph) {
+  return React.createElement(glyph.tag, glyph.props,
+    ...glyph.children.map((c) => React.createElement(c.tag, c.props)))
 }

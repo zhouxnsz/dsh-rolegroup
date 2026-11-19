@@ -32,7 +32,7 @@ import {
   presetIdOf,
 } from '../lib/presets.js'
 import { renderBindingsExport } from '../lib/init.js'
-import { NAV_ICON_CSS, installSettingsNavIcon, markSettingsNavButton } from '../src/client/settings-nav-icon.js'
+import { NAV_GLYPH_PATHS, buildNavGlyph, renderNavGlyph } from '../src/client/settings-nav-icon.js'
 
 // 客户端 controller 的预填 / 「配置文件」按钮会 fetch 宿主接口；单测统一走内存桩，绝不打真实网络。
 const realFetch = globalThis.fetch
@@ -169,7 +169,6 @@ ok('buildInstanceConfig: dsh 0.2.1 形状 —— agentPreset 成对 + maxDepth:1
   assert.deepEqual(config, {
     provider: 'spawn',
     toolName: 'analyst',
-    modelSelectionSettings: false,
     agentOptions: { provider: 'qwen-token-plan-cn', model: 'qwen3.8-max' },
     agentPreset: 'rolegroup-analyst',
     allowedAgentPresets: ['rolegroup-analyst'],
@@ -180,6 +179,44 @@ ok('buildInstanceConfig: dsh 0.2.1 形状 —— agentPreset 成对 + maxDepth:1
     assert.equal(Object.hasOwn(config, forbidden), false, `${forbidden} 不得出现在 0.2.1 实例配置中`)
   }
   assert.equal(Object.hasOwn(config.agentOptions, 'persona'), false)
+  // 0.2.1-rc.1 起 modelSelectionSettings 已被 modelSelection 取代；旧键名 schema 不再消费，不得再写进实例配置
+  assert.equal(Object.hasOwn(config, 'modelSelectionSettings'), false, 'modelSelectionSettings 是已退役键，不得出现在实例配置中')
+})
+
+// 证伪：把 buildInstanceConfig 里塞回 `modelSelectionSettings: false` → 本条红（schema 不消费它，写了只会误导）
+await okAsync('buildInstanceConfig: rc.5 部署树 schema 对实例配置的接受性——逐字段解析、无 throw', async () => {
+  const { findDeploymentNodeModules } = await import('../scripts/link-deployment-deps.mjs')
+  const deploy = findDeploymentNodeModules()
+  if (deploy === undefined) return // 没有 dsh 部署树的环境跳过（与 engines 覆盖断言同款宽容）
+  const mod = await import(new URL('./lib/index.js', `file://${join(deploy, 'dsh-tool-subagent')}/`).href)
+  const C = mod.Config
+  assert.ok(typeof C === 'function', 'tool-subagent 须导出 Config schema')
+  const { roles } = mergeRoles(undefined)
+  const analyst = roles.find((r) => r.toolName === 'analyst')
+  const cfg = buildInstanceConfig(analyst, 'rolegroup-analyst')
+  const parsed = C(cfg) // schemastery 校验：未知键不抛、已知键给默认值
+  assert.equal(parsed.provider, 'spawn')
+  assert.equal(parsed.toolName, 'analyst')
+  assert.equal(parsed.maxDepth, 1)
+  assert.equal(parsed.modelSelection, false, '缺省即 false——不再需要显式传旧键')
+  assert.equal(parsed.agentPreset, 'rolegroup-analyst')
+  assert.deepEqual(parsed.allowedAgentPresets, ['rolegroup-analyst'])
+  assert.deepEqual(parsed.agentOptions, { provider: 'qwen-token-plan-cn', model: 'qwen3.8-max' })
+  assert.equal(Object.hasOwn(parsed, 'modelSelectionSettings'), false, 'schema 输出不得带已退役键')
+})
+
+// 证伪：删掉这条断言本身不会让套件变红；它的价值在「真实 schema 拒绝退役键」这一外部契约上。
+// 若上游恢复消费该键（或改名），本条以不同失败方式变红——两种情况都要求同步实现。
+await okAsync('buildInstanceConfig: 退役键透传实验——旧键名不得改变 schema 输出语义', async () => {
+  const { findDeploymentNodeModules } = await import('../scripts/link-deployment-deps.mjs')
+  const deploy = findDeploymentNodeModules()
+  if (deploy === undefined) return
+  const mod = await import(new URL('./lib/index.js', `file://${join(deploy, 'dsh-tool-subagent')}/`).href)
+  const C = mod.Config
+  const base = { provider: 'spawn', toolName: 't', agentOptions: { provider: 'p', model: 'm' }, maxDepth: 1 }
+  const withLegacy = C({ ...base, modelSelectionSettings: true })
+  assert.equal(withLegacy.modelSelection, false,
+    'rc.5 schema 不消费 modelSelectionSettings：即使传 true，modelSelection 仍为缺省 false——旧键是 no-op')
 })
 
 ok('buildInstanceConfig: reasoningEffort 透传 + allowedAgentPresets 单元素（v0.6/A2）', () => {
@@ -3607,38 +3644,32 @@ await okAsync('controller: provider 未注册 → routeGaps + 一键补齐到默
   assert.deepEqual([row.provider, row.model], ['deepseek-official', 'deepseek-flash'])
 })
 
-ok('settings-nav-icon: 按 label 标记带 svg 的导航按钮；CSS 走 mask；无 document 安全 no-op', () => {
-  const svg = { tagName: 'svg' }
-  const target = { textContent: '角色配置', dataset: {}, firstElementChild: svg }
-  const other = { textContent: '通用设置', dataset: {}, firstElementChild: svg }
-  assert.equal(markSettingsNavButton([other, target], '角色配置'), target)
-  assert.equal(target.dataset.dshRgNav, '')
-  assert.equal(markSettingsNavButton([other], '角色配置'), undefined)
-  assert.ok(NAV_ICON_CSS.includes('button[data-dsh-rg-nav]'))
-  assert.ok(NAV_ICON_CSS.includes('mask'))
-  const dispose = installSettingsNavIcon(() => '角色配置', { document: undefined })
-  dispose()
+ok('settings-nav-icon: 图标描述为 svg + currentColor 线稿；size 取 owner props（rc.5 槽位版）', () => {
+  const glyph = buildNavGlyph({ size: 16 })
+  assert.equal(glyph.tag, 'svg')
+  assert.equal(glyph.props.width, 16)
+  assert.equal(glyph.props.stroke, 'currentColor')
+  assert.deepEqual(glyph.children.map((c) => c.tag), ['path', 'circle', 'path'])
+  // 缺省 size = 16；非法值回落 16（不抛）
+  assert.equal(buildNavGlyph().props.width, 16)
+  assert.equal(buildNavGlyph({ size: 0 }).props.width, 16)
+  assert.equal(buildNavGlyph({ size: 'x' }).props.width, 16)
 })
 
-await okAsync('settings-nav-icon: 注入样式并标记设置导航按钮，dispose 清理（DOM 装饰回归）', async () => {
-  const appended = []
-  const style = { setAttribute() {}, textContent: '', remove() { this.removed = true } }
-  const button = { textContent: '角色配置', dataset: {}, firstElementChild: { tagName: 'svg' } }
-  const doc = {
-    body: {},
-    head: { append(child) { appended.push(child) } },
-    createElement() { return style },
-    querySelectorAll(selector) { return selector === 'button' ? [button] : [button] },
+ok('settings-nav-icon: renderNavGlyph 用 React.createElement 展开 children（浏览器侧渲染路径）', () => {
+  const calls = []
+  const fakeReact = { createElement: (...a) => { calls.push(a); return a } }
+  const node = renderNavGlyph(fakeReact, buildNavGlyph({ size: 16 }))
+  assert.equal(node[0], 'svg')
+  assert.equal(calls.length, 4, 'svg + 3 个子节点各 createElement 一次')
+})
+
+// 旧装饰 hack 必须彻底消失（否则是半迁移状态）。
+ok('settings-nav-icon: 退役 CSS mask / data-dsh-rg-nav / MutationObserver 装饰通道', () => {
+  const src = readFileSync(fileURLToPath(new URL('../src/client/settings-nav-icon.js', import.meta.url)), 'utf8')
+  for (const dead of ['NAV_ICON_CSS', 'data-dsh-rg-nav', 'MutationObserver', 'mask-image']) {
+    assert.ok(!src.includes(dead), `settings-nav-icon.js 仍残留已退役的装饰实现：${dead}`)
   }
-  const dispose = installSettingsNavIcon(() => '角色配置', {
-    document: doc,
-    MutationObserver: class { observe() {} disconnect() {} },
-    requestAnimationFrame: (fn) => fn(),
-  })
-  assert.deepEqual(appended, [style])
-  assert.equal(button.dataset.dshRgNav, '')
-  dispose()
-  assert.equal(style.removed, true)
 })
 
 
@@ -3771,12 +3802,18 @@ await okAsync('T4：中英 README 与最新变更块同步备用链、预警和�
   assert.match(zhReadme, /无法复现的按 UNVERIFIED 处理/)
   assert.match(enReadme, /unreproducible facts are marked UNVERIFIED/)
   // 开发期读 Unreleased；定版后没有该标题时读首个版本块，避免 release 流程把文档断言卡死。
-  const firstHeading = changelog.indexOf('## [')
+  const unreleasedHeading = changelog.indexOf('## [Unreleased]')
+  const firstHeading = unreleasedHeading === -1 ? changelog.indexOf('## [') : unreleasedHeading
   assert.notEqual(firstHeading, -1, 'CHANGELOG 必须至少有一个变更块')
   const nextHeading = changelog.indexOf('\n## [', firstHeading + 4)
   const currentChanges = changelog.slice(firstHeading, nextHeading === -1 ? changelog.length : nextHeading)
-  assert.match(currentChanges, /fiber\/preset 残留/)
-  assert.match(currentChanges, /备用链与证据要求/)
+  if (unreleasedHeading !== -1) {
+    // Unreleased 段存在 ⇒ 0.12.0 已定稿、其锚点短语落在版本块里；改锁 Unreleased 自身的核心判据。
+    assert.match(currentChanges, /modelSelectionSettings/, 'Unreleased 段须记录退役键清理条目')
+  } else {
+    assert.match(currentChanges, /fiber\/preset 残留/)
+    assert.match(currentChanges, /备用链与证据要求/)
+  }
 })
 
 await okAsync('公开面卫生：追踪文件不得来自过程档案目录、不得含个人绝对路径（公开面纪律）', async () => {
@@ -4178,7 +4215,8 @@ await okAsync('client-index 门控时序：未 serve 不注册、serve 后 slots
   assert.equal(calls.whileServed.length, 1, 'configForms.whileServed 须被调用恰好 1 次')
   assert.deepEqual(calls.whileServed[0][0], ['dsh-rolegroup'])
   assert.equal(calls.slotsInject.length, 0, 'host 未 serve 命名空间时不得注册卡片（whileServed 门控）')
-  assert.equal(calls.slotsRegister.length, 0)
+  // icon 注册不受 whileServed 门控（apply 期即注册），此处 slotsRegister 只允许那 1 次 icon
+  assert.equal(calls.slotsRegister.filter((a) => a[0]?.name === 'settings.section').length, 0)
   // ③ 模拟 host 开始 serve → 触发 register 回调 → slots.inject 恰 1 次，参数为 settings.section + AsyncFunction
   const registerFn = calls.whileServed[0][1]
   registerFn(new Set(['dsh-rolegroup']))
@@ -4187,10 +4225,15 @@ await okAsync('client-index 门控时序：未 serve 不注册、serve 后 slots
   const injectCb = calls.slotsInject[0][1]
   assert.equal(typeof injectCb, 'function', 'slots.inject 第二参数须为函数')
   assert.equal(injectCb.constructor.name, 'AsyncFunction', 'inject 回调须为 async 函数')
-  // ④ 组件注册延迟到回调内：未触发回调时 slots.register 为 0
-  assert.equal(calls.slotsRegister.length, 0, '组件注册须延迟到 inject 回调内')
-  // ⑤ ctx.effect 恰 3 次（词典 + 导航图标装饰 + whileServed 门控），标签可辨
-  assert.equal(calls.effect.length, 3, 'ctx.effect 须被调用恰好 3 次（词典 + 导航图标装饰 + whileServed 门控）')
+  // ④ 组件注册延迟到回调内：未触发 whileServed 回调时 settings.section 的 register 为 0；
+  //    导航图标（settings.section.icon）在 apply 期直接注册，恰 1 次。
+  const iconRegs = calls.slotsRegister.filter((a) => a[0]?.name === 'settings.section.icon')
+  const sectionRegs = calls.slotsRegister.filter((a) => a[0]?.name === 'settings.section')
+  assert.equal(sectionRegs.length, 0, '卡片组件注册须延迟到 inject 回调内')
+  assert.equal(iconRegs.length, 1, '导航图标须经 slots.register 注册进 settings.section.icon（rc.5 官方槽位）')
+  assert.equal(iconRegs[0][0].id, 'rolegroup', 'icon 的 registration id 必须等于目标 section 的 id')
+  // ⑤ ctx.effect 恰 3 次（词典 + 导航图标注册 + whileServed 门控），标签可辨
+  assert.equal(calls.effect.length, 3, 'ctx.effect 须被调用恰好 3 次（词典 + 导航图标注册 + whileServed 门控）')
   assert.ok(calls.localeRegister.length >= 1, '词典必须注册')
 })
 

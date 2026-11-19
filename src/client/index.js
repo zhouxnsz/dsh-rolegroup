@@ -14,7 +14,7 @@
 // 值必须与 host 侧条目 id / 命名空间逐字一致。
 
 import { RolegroupCardController } from './controller.js'
-import { installSettingsNavIcon } from './settings-nav-icon.js'
+import { buildNavGlyph, renderNavGlyph } from './settings-nav-icon.js'
 import { zh, en } from './locales.js'
 
 /** settings 命名空间 === host Loader 条目 id（`lib/config.js` 的 ROLEGROUP_ENTRY_ID）。 */
@@ -29,9 +29,19 @@ export function apply(ctx) {
   ctx.effect(() => ctx.locale.register('rolegroup', { zh, en }), 'dsh-rolegroup: dictionaries')
   // 导航条目名与节内标题都取自词典（注册项的 `label` 是设置页左侧导航显示的名字）。
   const t = ctx.locale.bind('rolegroup')
-  // Settings-shell nav glyph: the slot has no icon option, so this is a scoped
-  // CSS decoration that falls back to the shell's gear when unsupported.
-  ctx.effect(() => installSettingsNavIcon(() => t('title')), 'dsh-rolegroup: settings nav icon')
+  // 设置页导航图标：0.2.2-rc.5 起走官方 `settings.section.icon` 槽位（registration id 必须
+  // 等于目标 section 的 id；缺席时 shell 保留默认齿轮）。旧版是 CSS mask 装饰 hack，已退役。
+  // React 从 client 注入环境取（与 card.jsx 同源）；取不到时返回 null——shell 仍渲染文字标签，
+  // 不会崩、不会留空按钮以外的痕迹。
+  ctx.effect(() => ctx.slots.register({
+    name: 'settings.section.icon',
+    id: 'rolegroup',
+    order: 30,
+    label: () => t('title'),
+  }, (props) => {
+    const React = globalThis.React ?? ctx.react
+    return React === undefined ? null : renderNavGlyph(React, buildNavGlyph(props))
+  }), 'dsh-rolegroup: settings nav icon')
   // scope 面与旧 settings 作用域同形（getSnapshot/subscribe/mutate/unset），controller 逻辑零改动。
   const controller = new RolegroupCardController(ctx.configForms.get(ROLEGROUP_CLIENT_NS), ctx)
   // 注册为**设置页的一个 section**（`settings.section`；官方 models / agent-presets、第三方皮肤中心 / PET 同款），

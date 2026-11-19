@@ -9,6 +9,52 @@
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- **实例配置不再携带已退役键 `modelSelectionSettings`**（dsh 0.2.2-rc.5 核对，2026-11-19）。该键在
+  0.2.1-rc.1 起被上游改名为 `modelSelection`（升级指南
+  `docs/upgrade-guide/v0.2.1-rc.1/subagent-control-tools/guide.md:12`），
+  rc.5 的 schema 对旧键名**不消费也不报错**——传 `true` 也不会开启调用期路由字段。此前它一直躺在
+  `buildInstanceConfig` 里，靠 schemastery「未知键原样保留」侥幸无害；现删除，行为不变（缺省即 false）。
+- 注释与文档同步：`lib/index.js` / `lib/roles.js` 头注中关于 `install(ctx, undefined)` 站立式组合、
+  `assertAllowedModelSelection` 白名单的说法改为按 rc.5 契约措辞（`modelSelection` 缺省 false → 不暴露
+  调用期路由字段）。
+
+### Changed
+
+- README 中英「本机实测」版本改为 0.2.2-rc.5（`engines.dsh` 保持 `>=0.2.1-rc.1`）。
+- **设置页导航图标改用官方 `settings.section.icon` 槽位注册**（rc.5 新增，contract/slots.d.ts:85），
+  替换旧的「data 属性 + scoped CSS mask」装饰 hack；registration id = section id（`rolegroup`），
+  React 缺席时返回 null（shell 保留默认齿轮）。`src/client/settings-nav-icon.js` 重写为纯函数
+  （`buildNavGlyph` / `renderNavGlyph`），`index.js` 在 apply 期直接注册、不受 whileServed 门控。
+- 新增两条部署树断言（`tests/smoke.mjs`）：① `buildInstanceConfig` 的输出经 rc.5 真实 Config schema
+  逐字段解析通过且不含退役键；② 旧键名即使传 `true` 也不改变 `modelSelection` 缺省语义（no-op 锁定）。
+  证伪：把 `modelSelectionSettings: false` 塞回实现 → 第 ① 条红。
+- 图标迁移的断言：svg 描述 + size 回落、createElement 展开计数、退役字符串卫生检查、
+  gating 用例改按槽位名分流（icon 恰 1 次、section 延迟 0 次）。AGENTS.md 坑清单同步改写。
+
+### 验证（0.2.2-rc.5 真机）
+
+- 启动报告 8/8 注册，`failed` / `invalid` / `problems` 全空（`~/.dsh/plugins/dsh-rolegroup/last-startup.json`，2026-11-19T02:37:33Z）；
+- schemastery 软链指向部署树 3.19.0，`npm run link:deps` 输出「无需改动」；
+- `npm test` 156 passed；`npm run build:client` 产物无变化（本次未改客户端源码）。
+
+### 核对过的升级项（均不适用）
+
+`v0.2.2-rc.4/web-search-deepseek-model-default`（只改 web 搜索默认提供方）、
+`v0.2.2-rc.3/deepseek-refusal-code`（错误码改名，插件不消费）。委派、Agent Preset、settings、
+manifest、schemastery 五个依赖面逐项对照 rc.5 安装版源码核验，契约全部存活。
+
+Removes the retired `modelSelectionSettings` key from instance configs (renamed to `modelSelection`
+upstream since 0.2.1-rc.1; rc.5's schema ignores it silently). Behavior unchanged — the default is
+already false. Adds two deployment-tree assertions that parse our instance config through the real
+rc.5 Config schema and pin the retired key as a no-op. Updates the verified-on version in both READMEs
+to 0.2.2-rc.5.
+
+---
+
 ## [0.12.0] — 2026-11-16
 
 ### Added
