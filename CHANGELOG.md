@@ -3,12 +3,13 @@
 本项目遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 版本纪律见 `AGENTS.md`「提交与发布」。
 
-> **`npm` 上一个已发布版本是 `0.6.1`。** 这期间开发中用过 0.6.2 / 0.6.3 / 0.8.0 等内部里程碑号，
-> 但都没有发布；下面 `0.7.0` 是**自 `0.6.1` 以来的累积变更**（按 semver 只升一个 minor，不跳号）。
+> **历史注记**：`0.7.0` 发布前，npm 上的上一版本是 `0.6.1`；这期间开发中用过 0.6.2 / 0.6.3 / 0.8.0 等
+> 内部里程碑号但都没发布，所以 `0.7.0` 是**自 `0.6.1` 以来的累积变更**（按 semver 只升一个 minor，不跳号）。
+> 当前 npm 上的 latest 见 registry（2026-11-16 查 `dist-tags.latest` = `0.11.7`）。
 
 ---
 
-## [Unreleased]
+## [0.12.0] — 2026-11-16
 
 ### Added
 
@@ -19,9 +20,48 @@
 
 - 角色委派方法论：`analyst` / `reviewer` / `scout` 的 persona 增加核验纪律（逐字引用、`UNVERIFIED`、
   `PARTIAL` 与 `FALSE` 的区分）；`roleAnnouncement` 增加简报模板、父 agent 规范（子任务结论是输入不是裁决）
-  和角色分流（事实核验 → reviewer/scout，设计判断 → analyst，实现 → coder）。
+  和角色分流（代码定位/事实取证 → scout，带验收标准的收口核对 → reviewer，设计判断 → analyst；
+  实现任务已有结构化计划或规格才派 coder，未形成计划的可先派 planner）。
 - 依据：2026-11-16 的四臂对照。同一 `analyst` 下，中性简报逐字准确；加了“如果全真就说 5/5 TRUE”的简报
   把 5 条部分成立的命题全判 `TRUE` 并编造引用。完整记录在内部评测档案，不随仓库公开。
+- 角色公告明确备用链只在配置提供 `fallbackModels` 时生效，示例路由改为 `kimi-coding/k3.1-pro`，并明确角色工具仅主会话可用。
+- coder/planner 去方法论化：内置 persona 不再写死 TDD 与 plans.md；计划/规格路径由调用方简报给出（兼容 openspec
+  的 tasks.md、superpowers 的 docs/plans/*.md、changeflow 的 plans/<change>.md），验证节奏以计划描述为准。
+  注意传播断点：已在面板保存过角色的用户，其内联 persona 不受内置表变更影响，需「恢复官方推荐」或手动编辑才能切换到新默认。
+
+### Fixed
+
+- 启动期改用备用档后，末次角色公告会按实际路由重发，并列出「已改用备用档」的角色；重挂失败或被 preset
+  健康审计剔除的角色不会再同时出现在这条备用档提示里。
+- 零在册角色且有降级时，公告只说明当前无角色、列出降级并给出 `/rolegroup doctor`，不再输出空角色列表、
+  `fallback` 分流或简报模板；降级段也删去了并不总成立的「其余角色不受影响」。零角色且无降级时公告返回空串。
+- provider 已注册但模型未在广告列表的角色，除了启动日志，现在也会在公告中列出「模型未在广告列表」及
+  「委派预检可能失败」；降级与该预警可并存，风险条目使用 resolved 实际备用路由，不再错写主路由。
+- 修复路由解析返回角色副本后按对象 key 回收导致的 fiber/preset 残留；重挂失败立即按 toolName 从有效角色
+  剔除并回收资源，后续审计 reject/timeout 不再把它留在 registered，也不影响其他健康角色。
+- 修正公告的备用链与证据要求：不再声称所有角色都有备用链；代码、运行、图片与外部事实分别要求文件:行号、
+  命令与输出、区域/坐标和原始来源，无法复现的按 UNVERIFIED 处理。
+- 文档修正与精简：源码首装改为 `npm install --omit=peer` → `link:deps`，analyst 示例回到
+  `qwen3.8-max`，vision 备用链说明补齐账号档；删除过期的测试数量，合并重复安装说明并压缩 doctor 正常示例。
+
+### 验证
+
+- `npm test` 154 passed；
+- `npm run build:client` 连跑两次，产物 hash 一致（构建确定性）；
+- 真实 DSH 中 `/rolegroup doctor`：重载前后均 8 个角色在册，`failed` / `invalid` / `problems` 为空；
+- 一次 `/rg` 实际委派：命中 `fallback`，返回了包名与版本；
+- 插件停用再启用后，启动报告的时间字段有更新。
+
+截至定版时尚未执行 `npm publish`。
+
+### English summary
+
+Adds `/rg` for role-based delegation from the main session. Changes delegation verification discipline
+(verbatim citations, evidence requirements per fact type) and makes coder/planner methodology-neutral so
+callers pass their own plan or spec paths. Fixes lifecycle cleanup (no leftover fiber/preset when
+re-registration fails), warnings that now report the actual fallback route, and role announcement text that
+no longer overclaims fallback chains or hides degradation states. Also corrects and trims the bilingual
+installation, model, and diagnostics documentation.
 
 ---
 

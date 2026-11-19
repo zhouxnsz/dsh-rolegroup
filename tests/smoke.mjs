@@ -201,6 +201,18 @@ ok('roleAnnouncement: 有降级时追加「运行时降级」段；健康时完�
   assert.ok(degraded.includes('注册失败：planner'), degraded)
   assert.ok(degraded.includes('/rolegroup doctor'), '降级提示必须指向 doctor（模型据此告知用户怎么修）')
   assert.equal(degraded.includes('`coder`'), false, '降级段不得用反引号包角色名（既有断言靠它判断在册列表）')
+  assert.equal(degraded.includes('其余角色不受影响'), false, '零角色或只剩一个角色时，该保证是假话')
+})
+
+ok('roleAnnouncement: 零角色 + 降级只输出在册状态与排障入口；零角色且无降级返回空串', () => {
+  const text = roleAnnouncement([], { degradations: ['已剪枝：coder'] })
+  assert.ok(text.includes('当前没有在册角色'), text)
+  assert.ok(text.includes('运行时降级'), text)
+  assert.ok(text.includes('/rolegroup doctor'), text)
+  for (const forbidden of ['以下角色', '`fallback`', '其余角色不受影响']) {
+    assert.equal(text.includes(forbidden), false, `零角色公告不得含「${forbidden}」：${text}`)
+  }
+  assert.equal(roleAnnouncement([], {}), '')
 })
 
 // --- v0.8/AC-13：多模态角色 vision 的绑定与安全约束 ---
@@ -232,6 +244,21 @@ ok('所有内置角色名都是合法工具名且唯一', () => {
   for (const n of names) assert.ok(TOOL_NAME_RE.test(n), n)
 })
 
+ok('roles: 内置 coder / planner 方法论中立（去 TDD/plans.md 字面）', () => {
+  const { roles } = mergeRoles(undefined)
+  const by = Object.fromEntries(roles.map((r) => [r.toolName, r]))
+  for (const name of ['coder', 'planner']) {
+    const text = `${by[name].persona}\n${by[name].summary}`
+    for (const forbidden of ['TDD', 'SDD', 'plans.md', '红-绿', '测试先行']) {
+      assert.equal(text.includes(forbidden), false,
+        `${name} 的 persona + summary 不得含方法论或固定计划文件名字面「${forbidden}」：${text}`)
+    }
+  }
+})
+
+const fallbackClaim = '以下角色是绑定了模型路由的委派工具；备用链仅在角色配置提供 fallbackModels 时生效。'
+const evidenceRule = '事实性结论必须有可核验依据：代码事实给文件:行号，运行结果给命令与输出，图片给区域/坐标，外部事实给原始来源；无法复现的按 UNVERIFIED 处理。'
+
 ok('roleAnnouncement: 包含每个角色与模型 + 0.2.1 委派语义（v0.6/A14）', () => {
   const { roles } = mergeRoles(undefined)
   const text = roleAnnouncement(roles)
@@ -240,24 +267,55 @@ ok('roleAnnouncement: 包含每个角色与模型 + 0.2.1 委派语义（v0.6/A1
     assert.ok(text.includes(`${r.provider}/${r.model}`), r.toolName)
   }
   assert.ok(text.includes('不可再嵌套委派'), '必须保留"不可再嵌套委派"约定')
-  assert.ok(text.includes('立即返回'), '必须说明委派立即返回 subagent id')
+  assert.ok(text.includes('立即返回'), '必须说明委派立即返回 subagent 名称')
   assert.ok(text.includes('完成通知') || text.includes('完成时收到通知'), '必须说明完成通知语义')
   assert.ok(text.includes('description') && text.includes('子任务标题'), '必须要求 description 带模型并说明它会显示为子任务标题')
+  assert.ok(text.includes(fallbackClaim), `公告必须准确限定备用链生效条件：${text}`)
 })
 
 // --- v0.12：委派方法论（plans/v0.12-delegation-methodology.md）---
 // 2026-11-16 四臂对照：简报里写“如果全真就说 5/5 TRUE”会让 analyst 把 5 条部分成立的命题
 // 全判 TRUE 并编造引用；中性简报的 A 臂逐字准确。故公告必须要求“不要预设结论分布”，
 // 并要求事实性结论可落到文件:行号。
-ok('roleAnnouncement: 简报模板 / 中立纪律 / 父 agent 规范（v0.12）', () => {
+ok('roleAnnouncement: 简报模板 / 中立纪律 / 父 agent 规范（v0.12；分流句改按取证、验收与计划边界）', () => {
   const { roles } = mergeRoles(undefined)
   const text = roleAnnouncement(roles)
   for (const needle of ['已知事实', '待核验命题', '不要预设结论分布', 'UNVERIFIED', '子任务结论是输入']) {
     assert.ok(text.includes(needle), `公告缺少方法论关键词：${needle}\n${text}`)
   }
-  for (const needle of ['事实核验优先 reviewer/scout', '设计判断用 analyst', '实现用 coder']) {
-    assert.ok(text.includes(needle), `公告缺少角色分流：${needle}\n${text}`)
+  // 旧分流把 reviewer 说成事实取证工具、把 coder 说成无需计划的通用实现入口，与各自 persona 冲突，故更新断言。
+  // 本轮把 plans.md 字面约定泛化为「结构化计划或规格」，因此同步更新 coder/planner 分流断言。
+  for (const needle of [
+    '代码定位/事实取证用 scout',
+    '带验收标准的收口核对用 reviewer',
+    '设计判断用 analyst',
+    '未形成计划的可先派 planner',
+    fallbackClaim,
+    evidenceRule,
+    '引用逐字',
+    '仅主会话可用',
+    '登录校验实现 · kimi-coding/k3.1-pro',
+  ]) {
+    assert.ok(text.includes(needle), `公告缺少角色分流或委派约定：${needle}\n${text}`)
   }
+  assert.equal(text.includes('事实核验优先 reviewer/scout'), false, '旧 reviewer/scout 分流句不得保留')
+  assert.equal(text.includes('固定模型'), false, '备用链语义下不得再称固定模型')
+  assert.equal(text.includes('以下角色是绑定了主路由与备用链的委派工具'), false, '不得声称所有角色都有备用链')
+})
+
+ok('roleAnnouncement: 自定义无链角色不作备用链承诺，四类证据与 UNVERIFIED 规则完整', () => {
+  const mergedRoles = mergeRoles({
+    roles: { custom_only: { provider: 'deepseek-official', model: 'deepseek-flash' } },
+  }).roles
+  const custom = mergedRoles.find((role) => role.toolName === 'custom_only')
+  const text = roleAnnouncement(mergedRoles)
+  assert.ok(custom, '自定义合法角色必须先通过 mergeRoles，避免文案断言因角色缺席而假红')
+  assert.equal(custom.strict, true)
+  assert.equal(custom.fallbackModels, undefined)
+  assert.ok(text.includes('`custom_only`'), text)
+  assert.ok(text.includes(fallbackClaim), text)
+  assert.ok(text.includes(evidenceRule), text)
+  assert.equal(text.includes('以下角色是绑定了主路由与备用链的委派工具'), false, text)
 })
 
 ok('roles: analyst / reviewer / scout 含核验纪律（v0.12）', () => {
@@ -1910,6 +1968,9 @@ function makeComposeCtx({
   const logs = { info: [], warn: [], error: [] }
   const calls = { plugin: [], disposes: [], announcements: [], effectCleanups: [] }
   const handlers = new Map()
+  const fiberIdsByRole = new Map()
+  const disposedFiberIds = new Set()
+  let nextFiberId = 0
   const ctx = {
     logger: { info: (m) => logs.info.push(m), warn: (m) => logs.warn.push(m), error: (m) => logs.error.push(m) },
     get: (n) => ({
@@ -1918,9 +1979,18 @@ function makeComposeCtx({
       loader,
     })[n],
     plugin: async (mod, cfg) => { // 桩 fiber：记录注册配置，dispose 记账（AC-12/15 断言面）
+      const fiberId = `${cfg.toolName}#${++nextFiberId}`
       calls.plugin.push(cfg)
       trace?.push(['fiber-register', cfg.toolName])
-      return { dispose: async () => { calls.disposes.push(cfg); trace?.push(['fiber-dispose', cfg.toolName]) } }
+      if (!fiberIdsByRole.has(cfg.toolName)) fiberIdsByRole.set(cfg.toolName, new Set())
+      fiberIdsByRole.get(cfg.toolName).add(fiberId)
+      return {
+        dispose: async () => {
+          calls.disposes.push(cfg)
+          disposedFiberIds.add(fiberId)
+          trace?.push(['fiber-dispose', cfg.toolName])
+        },
+      }
     },
     systemPrompt: { section: (opts) => { calls.announcements.push(opts.text); return () => {} } },
     on: (event, handler) => {
@@ -1932,7 +2002,15 @@ function makeComposeCtx({
   }
   /** 触发一次 cordis volatile 配置提交（面板保存 → configEditor 写 profile patch → loader 提交）。 */
   const fireVolatile = () => { for (const handler of handlers.get('loader/volatile-update') ?? []) handler() }
-  return { ctx, logs, calls, fireVolatile, hasVolatileListener: () => (handlers.get('loader/volatile-update')?.length ?? 0) > 0 }
+  return {
+    ctx,
+    logs,
+    calls,
+    fiberIdsByRole,
+    disposedFiberIds,
+    fireVolatile,
+    hasVolatileListener: () => (handlers.get('loader/volatile-update')?.length ?? 0) > 0,
+  }
 }
 
 /**
@@ -1969,6 +2047,45 @@ const readReportWhen = (home, cond) => waitForCond(() => {
     return cond(report)
   } catch { return false }
 }, 'last-startup.json 满足条件')
+
+const sortedNames = (set) => [...set].sort()
+const overlap = (a, b) => [...a].filter((name) => b.has(name))
+
+/** T1 只投影假宿主可观察状态；不读取或调用 apply 闭包里的私有 disposeRole。 */
+function lifecycleProjection(fake, presets, report) {
+  const undisposed = (toolName) => [...(fake.fiberIdsByRole.get(toolName) ?? [])]
+    .filter((id) => !fake.disposedFiberIds.has(id))
+  const liveFibers = new Set([...fake.fiberIdsByRole.keys()].filter((toolName) => undisposed(toolName).length > 0))
+  const livePresets = new Set([...presets.definitions.keys()]
+    .filter((id) => id.startsWith(PRESET_ID_PREFIX))
+    .map((id) => id.slice(PRESET_ID_PREFIX.length)))
+  const announcement = fake.calls.announcements.at(-1) ?? ''
+  const announced = new Set([...announcement.matchAll(/^- `([^`]+)`/gm)].map((match) => match[1]))
+  return {
+    reportRegistered: new Set(report.registered.map((role) => role.toolName)),
+    reportInvalid: new Set(report.invalid.map((role) => role.toolName)),
+    announced,
+    liveFibers,
+    livePresets,
+    undisposed,
+  }
+}
+
+function assertLifecycleConsistent(state) {
+  assert.deepEqual(sortedNames(state.liveFibers), sortedNames(state.reportRegistered), 'report.registered 必须等于存活 fiber')
+  assert.deepEqual(sortedNames(state.livePresets), sortedNames(state.reportRegistered), 'report.registered 必须等于存活 preset')
+  assert.deepEqual(sortedNames(state.announced), sortedNames(state.reportRegistered), 'report.registered 必须等于末次公告角色集合')
+  assert.deepEqual(overlap(state.reportRegistered, state.reportInvalid), [], 'registered 与 invalid 必须按 toolName 互斥')
+}
+
+function assertRoleRemoved(state, toolName) {
+  assert.equal(state.reportRegistered.has(toolName), false, `${toolName} 不得留在 registered`)
+  assert.equal(state.reportInvalid.has(toolName), true, `${toolName} 必须进入 invalid`)
+  assert.equal(state.liveFibers.has(toolName), false, `${toolName} 不得残留 fiber`)
+  assert.equal(state.livePresets.has(toolName), false, `${toolName} 不得残留 preset`)
+  assert.equal(state.announced.has(toolName), false, `${toolName} 不得留在公告`)
+  assert.deepEqual(state.undisposed(toolName), [], `${toolName} 分配过的 fiber 必须全部 dispose`)
+}
 
 await okAsync('compose 重构等价性：启动快照字段形状与 registered 内容锁定（v0.4/AC-13 起点）', async () => {
   const tmp = await mkdtemp(join(tmpdir(), 'dsh-rg-t2-equiv-'))
@@ -2205,6 +2322,87 @@ await okAsync('compose 干净环境（无第三方凭据、模型列表为空）
       ['fallback', 'scout'],
       '主路由就是 deepseek-official 的两个角色不算降级',
     )
+    const announcement = fake.calls.announcements.at(-1) ?? ''
+    assert.ok(announcement.includes('`coder`（deepseek-account/deepseek-flash）'),
+      `末次公告必须展示 coder 的实际备用路由：${announcement}`)
+    const degradedLine = announcement.split('\n').find((line) => line.includes('已改用备用档'))
+    assert.ok(degradedLine?.includes('coder'), `降级条目必须点名 coder：${announcement}`)
+    assert.equal(announcement.includes('`coder`（kimi-coding/k3.1-pro）'), false,
+      `降级后的末次公告不得继续展示 coder 主路由：${announcement}`)
+  } finally {
+    __setTestOverrides(undefined)
+    if (prevHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = prevHome
+  }
+})
+
+await okAsync('compose 未广告模型：显式 coder 无备用链时仍在册，但末次公告必须提示预检风险', async () => {
+  const tmp = await mkdtemp(join(tmpdir(), 'dsh-rg-unadvertised-'))
+  const prevHome = process.env.DSH_HOME
+  process.env.DSH_HOME = tmp
+  __setTestOverrides({ debounceMs: 1, maxWaitMs: 5 })
+  try {
+    const fake = makeComposeCtx({
+      loader: makeContractLoader(),
+      llm: {
+        listProviders: () => [{ id: 'kimi-coding' }],
+        listModels: async () => [],
+      },
+    })
+    // 显式写 coder 且不写 fallbackModels：不得继承内置链，用于隔离 model-unadvertised 分支。
+    // planner 与 coder 共用 kimi-coding；把它显式指向未注册 provider，避免它也成为未广告角色。
+    const entry = makeEntryConfig([
+      { toolName: 'planner', provider: 'missing-provider', model: 'k3.1-pro' },
+      { toolName: 'coder', provider: 'kimi-coding', model: 'k3.1-pro' },
+    ], true)
+    await apply(fake.ctx, entry.config)
+    const report = await waitForReport(reportPathOf(tmp), 8000)
+    assert.deepEqual(report.registered.map((r) => r.toolName), ['coder'], '未广告模型仍应注册，其它 provider 缺席角色被剪枝')
+    const announcement = fake.calls.announcements.at(-1) ?? ''
+    assert.ok(announcement.includes('模型未在广告列表：coder'),
+      `末次公告必须提示 coder 的委派预检风险：${announcement}`)
+  } finally {
+    __setTestOverrides(undefined)
+    if (prevHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = prevHome
+  }
+})
+
+await okAsync('T2：降级与模型未广告预警并存，风险使用实际备用路由', async () => {
+  const tmp = await mkdtemp(join(tmpdir(), 'dsh-rg-t2-degraded-unadvertised-'))
+  const prevHome = process.env.DSH_HOME
+  process.env.DSH_HOME = tmp
+  __setTestOverrides({ debounceMs: 1, maxWaitMs: 5 })
+  try {
+    const fake = makeComposeCtx({
+      loader: makeContractLoader(),
+      llm: {
+        listProviders: () => [{ id: 'deepseek-official' }],
+        listModels: async () => [],
+      },
+    })
+    const entry = makeEntryConfig([{
+      toolName: 'degraded_unadvertised',
+      provider: 'test-primary',
+      model: 'main',
+      fallbackModels: ['deepseek-official/deepseek-flash'],
+      summary: '验证降级与未广告同时公告',
+    }], true)
+    await apply(fake.ctx, entry.config)
+    const report = await waitForReport(reportPathOf(tmp), 8000)
+    const actual = 'deepseek-official/deepseek-flash'
+    const primary = 'test-primary/main'
+    const text = fake.calls.announcements.at(-1) ?? ''
+    const degradedLine = text.split('\n').find((line) => line.includes('已改用备用档'))
+    const riskLine = text.split('\n').find((line) => line.includes('模型未在广告列表'))
+    assert.ok(degradedLine?.includes('degraded_unadvertised'), text)
+    assert.ok(riskLine?.includes(`degraded_unadvertised（${actual}）`), text)
+    assert.ok(!riskLine.includes(primary), text)
+    const routeWarning = fake.logs.warn.find((line) => line.includes('degraded_unadvertised') && line.includes('不在'))
+    assert.ok(routeWarning?.includes(actual), JSON.stringify(fake.logs.warn))
+    assert.ok(!routeWarning.includes(primary), routeWarning)
+    assert.ok(report.registered.some((role) => role.toolName === 'degraded_unadvertised'))
+    assert.equal(report.invalid.some((role) => role.toolName === 'degraded_unadvertised'), false)
   } finally {
     __setTestOverrides(undefined)
     if (prevHome === undefined) delete process.env.DSH_HOME
@@ -2513,7 +2711,125 @@ await okAsync('v0.6 审计一致性：preset broken → 移出 registered/公告
   }
 })
 
+await okAsync('T1 红1：路由解析后的 broken 角色按 toolName 回收，健康 coder 保持一致', async () => {
+  const tmp = await mkdtemp(join(tmpdir(), 'dsh-rg-t1-resolved-broken-'))
+  const prevHome = process.env.DSH_HOME
+  process.env.DSH_HOME = tmp
+  __setTestOverrides({ debounceMs: 1, maxWaitMs: 5 })
+  try {
+    const builtinRoles = mergeRoles(undefined).roles
+    const llm = {
+      listProviders: () => [...new Set(builtinRoles.map((role) => role.provider))].map((id) => ({ id })),
+      listModels: async (provider) => builtinRoles.filter((role) => role.provider === provider).map((role) => ({ id: role.model })),
+    }
+    const presets = makeFakeAgentPresets({ brokenIds: new Set(['rolegroup-analyst']) })
+    const fake = makeComposeCtx({ llm, agentPresets: presets.service, loader: makeContractLoader() })
+    await apply(fake.ctx, { debounceMs: 1, maxWaitMs: 5 })
+    const report = await waitForReport(reportPathOf(tmp), 8000)
+    const state = lifecycleProjection(fake, presets, report)
+    assertRoleRemoved(state, 'analyst')
+    for (const set of [state.reportRegistered, state.liveFibers, state.livePresets, state.announced]) {
+      assert.equal(set.has('coder'), true, '健康 coder 必须保留有效状态、资源与公告')
+    }
+    assert.equal(state.reportInvalid.has('coder'), false)
+    assertLifecycleConsistent(state)
+  } finally {
+    __setTestOverrides(undefined)
+    if (prevHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = prevHome
+  }
+})
 
+await okAsync('T1 红2：降级后 broken 的 scout 回收全部新旧资源，健康 coder 不受影响', async () => {
+  const tmp = await mkdtemp(join(tmpdir(), 'dsh-rg-t1-degraded-broken-'))
+  const prevHome = process.env.DSH_HOME
+  process.env.DSH_HOME = tmp
+  __setTestOverrides({ debounceMs: 1, maxWaitMs: 5 })
+  try {
+    const llm = {
+      listProviders: () => [{ id: 'deepseek-official' }],
+      listModels: async () => [{ id: 'deepseek-flash' }],
+    }
+    const presets = makeFakeAgentPresets({ brokenIds: new Set(['rolegroup-scout']) })
+    const fake = makeComposeCtx({ llm, agentPresets: presets.service, loader: makeContractLoader() })
+    const entry = makeEntryConfig([{
+      toolName: 'scout',
+      provider: 'test-primary',
+      model: 'main',
+      fallbackModels: ['deepseek-official/deepseek-flash'],
+    }], true)
+    await apply(fake.ctx, entry.config)
+    const report = await waitForReport(reportPathOf(tmp), 8000)
+    const state = lifecycleProjection(fake, presets, report)
+    assertRoleRemoved(state, 'scout')
+    assert.deepEqual(state.undisposed('coder').length, 1, '健康 coder 应保留一个存活 fiber')
+    assert.equal(state.livePresets.has('coder'), true)
+    assert.equal(state.announced.has('coder'), true)
+    assert.equal(state.reportInvalid.has('coder'), false)
+    assertLifecycleConsistent(state)
+  } finally {
+    __setTestOverrides(undefined)
+    if (prevHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = prevHome
+  }
+})
+
+await okAsync('T1 红3：重挂失败后审计 reject/timeout 都立即剔除 analyst，健康 coder 保留', async () => {
+  for (const auditMode of ['reject', 'timeout']) {
+    const tmp = await mkdtemp(join(tmpdir(), `dsh-rg-t1-remount-${auditMode}-`))
+    const prevHome = process.env.DSH_HOME
+    process.env.DSH_HOME = tmp
+    __setTestOverrides({ debounceMs: 1, maxWaitMs: 5 })
+    let releaseList
+    try {
+      const builtinRoles = mergeRoles(undefined).roles
+      const providers = [...new Set(builtinRoles.map((role) => role.provider))].filter((id) => id !== 'qwen-token-plan-cn')
+      const llm = {
+        listProviders: () => providers.map((id) => ({ id })),
+        listModels: async (provider) => {
+          const models = builtinRoles.filter((role) => role.provider === provider).map((role) => role.model)
+          if (provider === 'deepseek-account' || provider === 'deepseek-official') models.push('deepseek-flash', 'deepseek-v4-pro')
+          return [...new Set(models)].map((id) => ({ id }))
+        },
+      }
+      const presets = makeFakeAgentPresets()
+      const fake = makeComposeCtx({ llm, agentPresets: presets.service, loader: makeContractLoader() })
+      const realPlugin = fake.ctx.plugin
+      let analystFiberCount = 0
+      fake.ctx.plugin = async (mod, cfg) => {
+        if (cfg.toolName === 'analyst') {
+          analystFiberCount += 1
+          if (analystFiberCount === 2) throw new Error('模拟 analyst 重挂 fiber 失败')
+        }
+        return realPlugin(mod, cfg)
+      }
+      if (auditMode === 'reject') {
+        presets.service.list = async () => {
+          presets.calls.push(['list'])
+          throw new Error('模拟 preset 健康审计 reject')
+        }
+      } else {
+        releaseList = presets.holdList()
+      }
+      await apply(fake.ctx, { debounceMs: 1, maxWaitMs: 5 })
+      const report = await waitForReport(reportPathOf(tmp), 8000)
+      assert.ok(fake.logs.warn.some((line) => line.includes('preset 健康审计')), `${auditMode} 必须实际经过审计失败分支`)
+      const state = lifecycleProjection(fake, presets, report)
+      assertRoleRemoved(state, 'analyst')
+      for (const set of [state.reportRegistered, state.liveFibers, state.livePresets, state.announced]) {
+        assert.equal(set.has('coder'), true, `${auditMode}：健康 coder 必须保留有效状态、资源与公告`)
+      }
+      assert.equal(state.reportInvalid.has('coder'), false, `${auditMode}：健康 coder 不得进入 invalid`)
+      assert.deepEqual(state.undisposed('coder').length, 1, `${auditMode}：健康 coder 的 fiber 不得被回收`)
+      assertLifecycleConsistent(state)
+    } finally {
+      releaseList?.()
+      __setTestOverrides(undefined)
+      if (prevHome === undefined) delete process.env.DSH_HOME
+      else process.env.DSH_HOME = prevHome
+    }
+  }
+})
 
 // --- 模型链：内置备用档 + 启动期解析（决策 1：显式配置不自动降级）---
 ok('roles: parseRouteRef 只认 "provider/model"，首个斜杠切分', () => {
@@ -3441,6 +3757,26 @@ await okAsync('docs: README.md 与 README.en.md 章节编号 parity（双语防�
     const leaked = [...md.matchAll(/\]\(((?:docs|plans|evals|\.dsh)\/[^)]*)\)/g)].map((m) => m[1])
     assert.deepEqual(leaked, [], `${file} 不得链接未公开目录（docs/ plans/ evals/ .dsh/）：${leaked.join(', ')}`)
   }
+})
+
+await okAsync('T4：中英 README 与最新变更块同步备用链、预警和证据要求', async () => {
+  const root = fileURLToPath(new URL('..', import.meta.url))
+  const zhReadme = readFileSync(join(root, 'README.md'), 'utf8')
+  const enReadme = readFileSync(join(root, 'README.en.md'), 'utf8')
+  const changelog = readFileSync(join(root, 'CHANGELOG.md'), 'utf8')
+  assert.match(zhReadme, /备用链仅在角色配置提供 fallbackModels 时生效/)
+  assert.match(enReadme, /Fallback chains apply only when a role configuration provides fallbackModels/)
+  assert.match(zhReadme, /降级与模型未广告预警可并存，预检风险使用实际备用路由/)
+  assert.match(enReadme, /degraded and model-unadvertised warnings can coexist, and preflight risk names the actual fallback route/)
+  assert.match(zhReadme, /无法复现的按 UNVERIFIED 处理/)
+  assert.match(enReadme, /unreproducible facts are marked UNVERIFIED/)
+  // 开发期读 Unreleased；定版后没有该标题时读首个版本块，避免 release 流程把文档断言卡死。
+  const firstHeading = changelog.indexOf('## [')
+  assert.notEqual(firstHeading, -1, 'CHANGELOG 必须至少有一个变更块')
+  const nextHeading = changelog.indexOf('\n## [', firstHeading + 4)
+  const currentChanges = changelog.slice(firstHeading, nextHeading === -1 ? changelog.length : nextHeading)
+  assert.match(currentChanges, /fiber\/preset 残留/)
+  assert.match(currentChanges, /备用链与证据要求/)
 })
 
 await okAsync('公开面卫生：追踪文件不得来自过程档案目录、不得含个人绝对路径（公开面纪律）', async () => {

@@ -7,7 +7,7 @@ instance, so the tool name is the role name.
 The role/category binding is inspired by
 [oh-my-openagent](https://github.com/code-yeongyu/oh-my-openagent) ("omo"); see §9.
 
-> Version **0.11.7** ｜ dsh **≥ 0.2.1-rc.1** (verified on 0.2.2-rc.3) ｜ MIT
+> Version **0.12.0** ｜ dsh **≥ 0.2.1-rc.1** (verified on 0.2.2-rc.3) ｜ MIT
 
 ---
 
@@ -30,11 +30,9 @@ delegation. The two can coexist in one deployment. A common pattern is to split 
 
 | We do not | Why |
 |---|---|
-| **Orchestrate** (DAGs, multi-round collaboration, team pipelines) | That is the official Agent Teams' job; two orchestrators fight each other |
 | **Register an MCP server** | Dozens of tools inflate the tool list, the permission surface, and the prompt budget |
 | **Write a project-level state directory** (`.rolegroup/`) | We route work; we are not a runtime state machine — state belongs to the orchestration layer |
 | **Take over the main session's Agent Preset** | An explicit preset **replaces** the parent composition (§4); taking over means choosing for the user |
-| **Keep dual-shape branches for old dsh lines** | Since v0.6 we support ≥0.2.1 only; older lines get a clear error instead of half-working |
 
 When you need orchestration, state, or an MCP tool chain, compose other plugins — they do not replace this one.
 
@@ -49,12 +47,8 @@ dsh plugin --profile web add dsh-rolegroup
 You can also open the Plugins page, click "Add plugin", choose "Install a third-party plugin", enter
 `dsh-rolegroup`, and click "Install". Restart `dsh web` after installing.
 
-If a third-party market rewrite drops the plugin, add it again.
-
-### Plugin market
-
-Open the Plugin Market, search for `dsh-rolegroup`, and install it. The market uses the same plugin manager
-underneath.
+If a third-party market rewrite drops the plugin, add it again. You can also search for
+`dsh-rolegroup` in the Plugin Market and install it — same flow underneath.
 
 ### From source
 
@@ -63,16 +57,19 @@ For development or local changes:
 ```sh
 git clone https://github.com/zhouxnsz/dsh-rolegroup.git
 cd dsh-rolegroup
+npm install --omit=peer
 npm run link:deps
-npm install
 dsh plugin --profile web add "link:$PWD"
 ```
 
-`link:deps` symlinks the deployment's schemastery into this repo; the Settings panel needs it for source
-installs. Run `link:deps` before `npm install`: npm installs the `@deepseek-ai/schemastery` peer as a real
-copy, which blocks the symlink.
+`--omit=peer` installs the esbuild devDependency without pulling the peer
+`@deepseek-ai/schemastery` in as a real copy; `link:deps` then symlinks the deployment's schemastery into
+this repo, which the Settings panel needs for source installs. The reverse order breaks: a plain
+`npm install` puts a real copy there first, and `link:deps` **does not overwrite** an existing real
+directory. If you already have one, delete `node_modules/@deepseek-ai/schemastery` and rerun `link:deps`.
 
-You can also mount it on the home layer:
+You can also mount it on the home layer (use this only to survive profile rewrites; for regular
+development use the `link:` install above):
 
 ```sh
 ln -sfn "$PWD" ~/.dsh/profiles/web/node_modules/dsh-rolegroup
@@ -123,8 +120,8 @@ them in the panel. Model ids and the effective routes are whatever `/rolegroup d
 | Role | Built-in model | Responsibility |
 |---|---|---|
 | `analyst` | Qwen3.8 Max | Requirement clarification, path classification, plan review (do it / how), architecture decisions |
-| `planner` | Kimi K3.1 Pro | Plan design: file layout, task breakdown, interface contracts, writing `plans.md` |
-| `coder` | Kimi K3.1 Pro | Implementation: TDD red-green-refactor following `plans.md` steps |
+| `planner` | Kimi K3.1 Pro | Plan design: file layout, task breakdown, interface contracts, writing the plan document |
+| `coder` | Kimi K3.1 Pro | Implementation: follow the steps of the plan/spec document supplied in the brief and report evidence per step |
 | `reviewer` | Qwen3.8 Flash | Closing review: check acceptance criteria against evidence (was it actually done) |
 | `scout` | DeepSeek V4.1 Flash | Exploration and bulk search (returns `file:line` evidence) |
 | `scribe` | Qwen3.8 Flash | Documentation backfill, reports, spec maintenance |
@@ -133,8 +130,7 @@ them in the panel. Model ids and the effective routes are whatever `/rolegroup d
 
 ### Recommended bindings (official suggestion)
 
-See **[MODELS.en.md](./MODELS.en.md)** for the recommended model per role. "Recommended" and "built-in default"
-can differ — `reviewer` is one.
+See **[MODELS.en.md](./MODELS.en.md)** for the built-in default model per role.
 
 ### Delegation quality
 
@@ -142,15 +138,20 @@ Roles do not inherit the parent's context; the more specific the brief, the more
 plugin gives the main model a fixed template in the system prompt:
 
 - A brief should state: background, goal, constraints, acceptance, known facts (`file:line`), claims to verify;
-- Factual conclusions must land on `file:line`; quote verbatim, and treat quotes you cannot reproduce as
-  `UNVERIFIED`;
-- Do not prescribe the expected verdict distribution ("should be all true / should find problems"). In our
-  2026-11-16 comparison this wording made `analyst` mark five partially-true claims as all `TRUE` and
-  fabricate quotes; the neutral arm quoted the source accurately;
+- Factual conclusions need verifiable evidence: `file:line` for code, command and output for runtime results,
+  region/coordinates for images, and original sources for external facts;
+  quote verbatim, and unreproducible facts are marked UNVERIFIED;
+- Do not prescribe the expected verdict distribution ("should be all true / should find problems"). The
+  2026-11-16 comparison showed this wording makes `analyst` compress partially-true claims into `TRUE` and
+  fabricate quotes; the neutral briefs quoted verbatim.
 - A subagent's conclusion is input, not a verdict. Spot-check quotes; do not adopt a confident report that
   cannot show evidence.
 
-Route fact-checking to `reviewer` / `scout`, design judgement to `analyst`, implementation to `coder`.
+Fallback chains apply only when a role configuration provides fallbackModels; an explicitly configured role
+without that field does not inherit the built-in chain.
+The degraded and model-unadvertised warnings can coexist, and preflight risk names the actual fallback route.
+
+Use `scout` for code location and fact-finding, `reviewer` for acceptance-criteria closing review, and `analyst` for design judgement. For implementation, use `coder` when a structured plan or spec already exists (with its path supplied in the brief); if no plan has been formed, you may delegate to `planner` first.
 
 ## 4. Configuration
 
@@ -164,7 +165,7 @@ Built-in roles ship a chain that only targets the two DeepSeek providers dsh bun
 ```jsonc
 "analyst": {
   "provider": "qwen-token-plan-cn",
-  "model": "qwen4-max",
+  "model": "qwen3.8-max",
   "fallbackModels": ["deepseek-account/deepseek-flash", "deepseek-official/deepseek-flash", "deepseek-official/deepseek-v4-pro"]
 }
 ```
@@ -188,14 +189,11 @@ available, with repair hints when something is wrong. When a built-in fallback i
 > On a fresh machine, run `/rolegroup doctor` first to see which roles' primary routes are unavailable; change
 > bindings in the panel.
 
-Note: pasting text starting with `/` into the GUI composer sends it as a normal message, not a command. Type
-it by hand or pick it from the completion list.
-
 Example:
 
 > If a role's provider is not registered, an error block is appended below the table and the provider is
 > marked ❌. The role is not registered. This matters most for a fallback role: a skipped fallback route does
-> not exist. Built-in fallbacks point at dsh's own DeepSeek providers, which ship with every install:
+> not exist. The built-in `fallback` role uses `deepseek-official` because that provider is always registered:
 
 ```
 ❌ fallback：provider "example-provider" 当前未注册（在用：deepseek-official, kimi-coding, qwen-token-plan-cn）
@@ -204,18 +202,9 @@ Example:
 
 ```
 dsh-rolegroup doctor — 8 个在册角色
-快照时间 2026-10-25T12:00:00.000Z（0 天前）｜配置来源 (内置默认表)
-
-角色     绑定模型                         provider 模型
-analyst  qwen-token-plan-cn/qwen4-max    ✅       ✅
-planner  kimi-coding/k3.1-pro             ✅       ✅
-coder    kimi-coding/k3.1-pro             ✅       ✅
-reviewer qwen-token-plan-cn/qwen3.8-flash ✅       ✅
-scout    deepseek-official/deepseek-flash ✅       ✅
-scribe   qwen-token-plan-cn/qwen3.8-flash ✅       ✅
-vision   qwen-token-plan-cn/qwen3.8-flash ✅       ✅
-fallback deepseek-official/deepseek-flash ✅       ✅
-
+analyst  qwen-token-plan-cn/qwen3.8-max    ✅  ✅
+planner  kimi-coding/k3.1-pro              ✅  ✅
+…
 ✅ 无异常
 ```
 
@@ -225,23 +214,17 @@ when the llm service is down the availability column shows ➖.
 ## 7. Development
 
 ```sh
-npm run link:deps     # first after cloning: create the schemastery symlink
-npm install           # then install the esbuild devDependency
-npm test              # offline smoke suite, 158 cases; pretest runs link:deps
-npm run build:client  # after editing src/client/** or lib/roles.js
+npm install --omit=peer  # esbuild devDependency, without schemastery as a real copy
+npm run link:deps        # symlink the deployment's schemastery into this repo
+npm test                 # offline smoke suite (plain Node); pretest runs link:deps
+npm run build:client     # after editing src/client/** or lib/roles.js
 ```
 
-Run `link:deps` before `npm install`: npm installs the `@deepseek-ai/schemastery` peer as a real copy, which
-blocks the symlink. If you already ran `npm install`, delete `node_modules/@deepseek-ai/schemastery` and rerun
-`link:deps`. Without `npm install`, `npm test` fails with `ERR_MODULE_NOT_FOUND: esbuild`. Without
-`link:deps`, dsh prints
+For the install order and why, see §2 "From source". Without `npm install`, `npm test` fails with
+`ERR_MODULE_NOT_FOUND: esbuild`. Without `link:deps`, dsh prints
 `无法使用部署树的 @deepseek-ai/schemastery …` at startup and the plugin runs host-only: role tools still
-work, but the Settings section is missing.
-
-What `link:deps` does: the plugin is installed as a `link:`, so by Node's realpath rule it cannot import
-`@deepseek-ai/*` directly. Settings also requires the entry to export a schemastery `Config` statically,
-which cannot be resolved lazily. The script symlinks the deployment's schemastery into this repo; the symlink
-is not committed.
+work, but the Settings section is missing. `pretest` runs `link:deps` automatically, but it likewise does
+not overwrite an existing real copy.
 
 Layout:
 

@@ -13,13 +13,16 @@
 ## 本地开发
 
 ```sh
-npm test              # 离线 smoke suite（纯逻辑，Node 直跑，无浏览器依赖）
-npm run link:deps     # dsh 升级/换部署树后必须重跑
-npm run build:client  # 重建 lib/client.js（改了 src/client/** 或 lib/roles.js 后）
+npm install --omit=peer   # 首次 clone 后必跑：装 esbuild；--omit=peer 是因为 schemastery 由 link:deps 提供，不该装成真实副本
+npm run link:deps         # 把部署树的 schemastery 软链进来（dsh 升级/换部署树后必须重跑）
+npm test                  # 离线 smoke suite（纯逻辑，Node 直跑，无浏览器依赖）
+npm run build:client      # 重建 lib/client.js（改了 src/client/** 或 lib/roles.js 后）
 ```
 
 > `link:deps` 是必需的：本仓库是 `link:` 形态，按 Node 的 realpath 规则无法裸导入 `@deepseek-ai/*`，
-> 故需把 dsh 部署树里的 schemastery 软链进本仓库 `node_modules`。`npm test` 的 `pretest` 会自动跑它。
+> 故需把 dsh 部署树里的 schemastery 软链进本仓库 `node_modules`。`npm test` 的 `pretest` 会自动跑它，
+> 但**不会覆盖已存在的真实副本**——若之前跑过普通 `npm install`，先删掉
+> `node_modules/@deepseek-ai/schemastery` 再 `npm run link:deps`（细节见 `AGENTS.md` 的开发流程）。
 
 ## PR 要求
 
@@ -27,6 +30,7 @@ npm run build:client  # 重建 lib/client.js（改了 src/client/** 或 lib/role
 - 改了 `src/client/**` 或 `lib/roles.js` → **产物 `lib/client.js` 已重建**（否则源码与产物不一致）；
 - **新增行为要有断言**，且该断言在**旧实现上会红**（我们要求断言有证伪力，不接受恒真的测试）；
 - 面向用户的变更同步更新 `README.md` 与 `README.en.md`（两版章节编号必须一致）；
+- 用户可见的变更要在 `CHANGELOG.md` 的 `[Unreleased]` 补一条；
 - 新增/改动文档按 `AGENTS.md` 的文档纪律写（先具体后结论、每段有可核事实、别用套话清单）；
 - 不带入与主题无关的重构或格式化——把噪音留在别的 PR 里。
 

@@ -20,7 +20,7 @@ dsh 的**角色化委派插件**：角色 = 名字 + 绑定模型 + persona；�
 | `lib/config.js` | settings 条目 `Config`（schemastery）——命名空间的对外契约 |
 | `lib/settings-table.js` | section ↔ 面板覆盖表的双向映射、跨字段校验 |
 | `lib/doctor.js` | 纯逻辑：快照读取/归一化、`auditRoles`、`renderDoctorText` |
-| `lib/command.js` | `/rolegroup` 命令面（doctor / init） |
+| `lib/command.js` | `/rolegroup` 命令面（doctor / init / work）与短命令 `/rg` |
 | `lib/init.js` | `/rolegroup init`：把当前生效绑定导出成 JSONC 文本（只打印，不落盘） |
 | `lib/startup-scheduler.js` | 剪枝防抖 + 最大等待上限 |
 | `src/client/` | 浏览器侧：`controller.js`（纯逻辑）、`card.jsx`（渲染）、`locales.js`（词典）、`meta.js`（版本/仓库元信息，版本由构建注入）、`settings-nav-icon.js`（设置页导航图标的 scoped CSS 装饰）、`index.js`（槽位注册） |
@@ -112,13 +112,15 @@ graph/team 运行时）。它有值得学的点（**能力矩阵进系统提示*
   `deepseek-official`（API Key）。`tests` 里有断言锁着；加第三方网关进链会红。理由：别人的机器上不一定
   注册这些 provider，而这两个随 dsh-base 一起安装。
 - **`vision` 角色（0.8.0）的选型与排除**：主路由 `qwen-token-plan-cn/qwen3.8-flash`，依据是两条独立证据
-  （作者 omo 长期实践 + `scout-02` 子会话 OCR 10/10）。备用链只放 `deepseek-official/deepseek-flash`；
-  **`MiniMax-M3` 必须排除**（同批 4/10 且编造内容）、**`v4-pro` 不放**（视觉未测）。上游没有视觉能力位，
-  插件无法在启动期校验，故 persona 写死「看不清就说不清，绝不猜测」，README 给出自测方法。
+  （作者 omo 长期实践 + `scout-02` 子会话 OCR 10/10）。备用链为 `deepseek-account/deepseek-flash`（**链首**）→
+  `deepseek-official/deepseek-flash`；**`MiniMax-M3` 必须排除**（同批 4/10 且编造内容）、**`v4-pro` 不放**
+  （视觉未测）。上游没有视觉能力位，插件无法在启动期校验，故 persona 写死「看不清就说不清，绝不猜测」；
+  换绑后应用一张有字图片自测。
 - **模型链是「启动期解析」不是运行期切换**：`dsh-tool-subagent` 的 `agentOptions` 在注册时固定，所以
   备用档只能靠**重挂 fiber + 重注册 preset** 生效（`finalize` 里做，顺序：注销 fiber → 注销 preset →
   注册 preset → 注册 fiber）。preset 的 name/description 带模型，故降级后必须重建 preset，否则子代理
-  header 会继续显示原主路由。
+  header 会继续显示原主路由。**角色公告同理**：`finalize` 必须在降级或模型未广告时重发 section，
+  否则模型看到的是主路由而 fiber 跑备用档（`tests/smoke.mjs` 的干净环境用例锁这条）。
 - **显式配置不自动降级**（决策 1）：`mergeRoles` 给每个角色打 `strict`（出现于用户配置即 true）；
   用户的角色若没写 `fallbackModels`，**不继承**内置链。内置链只服务「用户没写这个角色」的情形。
 - **面板层必须携带模型链**（v0.8 起；此前刻意不带，导致面板保存=显式配置→**静默丢掉降级**）：
@@ -158,15 +160,20 @@ graph/team 运行时）。它有值得学的点（**能力矩阵进系统提示*
 ## 开发流程
 
 ```sh
-npm install           # ★ 首次 clone 后必跑（devDependency esbuild）
-npm test              # 离线 smoke suite（纯逻辑，Node 直跑，无浏览器依赖）
-npm run link:deps     # ★ 首次 clone 后、以及 dsh 升级/换部署树后必跑（见下）
-npm run build:client  # 重建 lib/client.js
+npm install --omit=peer  # ★ 首次 clone 后必跑（装 devDependency esbuild；--omit=peer 避免 schemastery 装成真实副本）
+npm run link:deps        # ★ 紧接着必跑：把部署树的 schemastery 软链进来
+npm test                 # 离线 smoke suite（纯逻辑，Node 直跑，无浏览器依赖）
+npm run build:client     # 重建 lib/client.js
 ```
+
+按这个顺序跑，`node_modules/@deepseek-ai/schemastery` 就是软链（2026-11-16 临时目录实测
+`lstat` 为 symlink）。普通 `npm install` 会先装出 peer 的真实副本，之后 `link:deps` 遇到真实目录
+**不覆盖**，就落到下面那个排障段里。
 
 **为什么需要 `link:deps`**：本仓库是 `link:` 形态（真实路径 = 本仓库），按 Node 的 realpath 规则
 **无法裸导入 `@deepseek-ai/*`**；而 settings 范式要求条目**静态导出** schemastery `Config`，不能延迟解析。
-故把部署树的 schemastery 软链进本仓库 `node_modules`（软链**不入库**，`pretest` 会自动重建）。
+故把部署树的 schemastery 软链进本仓库 `node_modules`（软链**不入库**）。`pretest` 会自动跑它，但同样
+**不会覆盖已存在的真实副本**——所以首装仍要显式走上面两步。
 
 **dsh 升级后要检查这个软链**：如果 `npm run link:deps` 的输出是「已存在且不是软链（可能是真实安装的
 副本），不覆盖」，说明本地留着一份旧版本的真实副本（`npm install` 装的 peer）。2026-11-13 dsh 升到

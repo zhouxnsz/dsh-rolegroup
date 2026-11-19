@@ -6,7 +6,7 @@ dsh 的角色化委派插件。先定义角色（名字、绑定模型、persona
 角色/类别绑定的思路参考了 [oh-my-openagent](https://github.com/code-yeongyu/oh-my-openagent)（omo），
 详见 §9。
 
-> 版本 **0.11.7** ｜ 要求 dsh **≥ 0.2.1-rc.1**（本机实测 0.2.2-rc.3）｜ MIT
+> 版本 **0.12.0** ｜ 要求 dsh **≥ 0.2.1-rc.1**（本机实测 0.2.2-rc.3）｜ MIT
 
 ---
 
@@ -27,7 +27,6 @@ dsh 的角色化委派插件。先定义角色（名字、绑定模型、persona
 
 | 不做 | 为什么 |
 |---|---|
-| **不做编排**（DAG / 多轮协作 / 团队流水线） | 那是官方智能体团队的职责；两套编排会互相踩 |
 | **不注册 MCP server** | 几十个工具会把工具列表、权限面、prompt 预算一起撑大 |
 | **不写项目级状态目录**（`.rolegroup/`） | 我们做的是「路由」，不是「运行时状态机」；状态属于编排层 |
 | **不接管主会话的会话模式（Agent Preset）** | 显式 preset 是**替换**父组合（§4），接管等于替用户做选择 |
@@ -45,11 +44,8 @@ dsh plugin --profile web add dsh-rolegroup
 也可以在「插件」页 →「添加插件」→「安装第三方插件」，填 `dsh-rolegroup`，点「安装」。装好后重启
 `dsh web`。
 
-如果第三方市场重写 profile 把插件清掉，重新 `add` 一次即可。
-
-### 插件市场
-
-打开「插件市场」，搜索 `dsh-rolegroup`，点安装。市场和上面的插件管理器走同一套安装流程。
+如果第三方市场重写 profile 把插件清掉，重新 `add` 一次即可。也可以在「插件市场」搜索
+`dsh-rolegroup` 安装，走同一套流程。
 
 ### 从源码安装
 
@@ -58,15 +54,17 @@ dsh plugin --profile web add dsh-rolegroup
 ```sh
 git clone https://github.com/zhouxnsz/dsh-rolegroup.git
 cd dsh-rolegroup
+npm install --omit=peer
 npm run link:deps
-npm install
 dsh plugin --profile web add "link:$PWD"
 ```
 
-`link:deps` 会把部署树的 schemastery 软链进来；源码安装时设置面板需要它。先跑 `link:deps` 再跑
-`npm install`：npm 会把 peer dependency `@deepseek-ai/schemastery` 装成真实副本，顺序反了会挡住软链。
+`--omit=peer` 装 devDependency esbuild 而不把 peer `@deepseek-ai/schemastery` 装成真实副本；随后
+`link:deps` 把部署树的 schemastery 软链进来，设置面板需要它。顺序反过来会踩坑：普通 `npm install`
+先装出真实副本，之后 `link:deps` 遇到真实目录**不覆盖**。已有真实副本时删掉
+`node_modules/@deepseek-ai/schemastery` 再跑一次 `link:deps`。
 
-也可以挂到 home 层：
+也可以挂到 home 层（仅当需要绕过 profile 重写时使用；常规开发用上面的 `link:` 安装）：
 
 ```sh
 ln -sfn "$PWD" ~/.dsh/profiles/web/node_modules/dsh-rolegroup
@@ -77,8 +75,7 @@ cat >> ~/.dsh/cordis.patch.yml <<'YAML'
 YAML
 ```
 
-home 层不会被 profile 重写覆盖，但不会出现在「已安装」组，也没有启停开关。两种源码安装方式选一个，
-不要同时用。
+home 层不会被 profile 重写覆盖，但不会出现在「已安装」组，也没有启停开关。两种方式选一个，不要同时用。
 
 ### 验证
 
@@ -114,8 +111,8 @@ dsh --profile web --dump-config | grep -A1 dsh-rolegroup   # 应出现 - id: dsh
 | 角色 | 内置绑定模型 | 职责 |
 |---|---|---|
 | `analyst` | Qwen3.8 Max | 需求澄清、路径分类、方案评审（做不做/怎么做）、架构决策 |
-| `planner` | Kimi K3.1 Pro | 计划设计：文件结构、任务拆分、接口契约、`plans.md` 落笔 |
-| `coder` | Kimi K3.1 Pro | 编码执行：按 `plans.md` 步骤 TDD 红-绿-重构 |
+| `planner` | Kimi K3.1 Pro | 计划设计：文件结构、任务拆分、接口契约、计划文档落笔 |
+| `coder` | Kimi K3.1 Pro | 编码执行：按计划/规格文档步骤实现并回填证据 |
 | `reviewer` | Qwen3.8 Flash | 收口审查：逐项核对验收标准与证据（做没做到） |
 | `scout` | DeepSeek V4.1 Flash | 探索定位、批量搜索（返回 `文件:行号` 证据） |
 | `scribe` | Qwen3.8 Flash | 文档回填、报告、spec 维护 |
@@ -124,19 +121,22 @@ dsh --profile web --dump-config | grep -A1 dsh-rolegroup   # 应出现 - id: dsh
 
 ### 推荐绑定（官方建议）
 
-各角色的官方推荐模型见 **[MODELS.md](./MODELS.md)**。表里「推荐」与「内置默认」可能不同，比如 `reviewer`。
+各角色的内置默认模型见 **[MODELS.md](./MODELS.md)**。
 
 ### 委派质量
 
 角色不继承父会话上下文，简报越具体，返回越可用。插件在系统提示里给主模型一段固定模板：
 
 - 简报至少写：背景、目标、约束、验收、已知事实（文件:行号）、待核验命题；
-- 事实性结论必须能落到文件:行号；引用逐字，无法复现的按 `UNVERIFIED` 处理；
-- 不要预设结论分布（不要写「应该全真/应该有问题」）。2026-11-16 的对照里，这句话让 `analyst` 把 5 条
-  部分成立的命题全判 `TRUE` 并编造引用；中性简报的那一组逐字准确；
+- 事实性结论必须有可核验依据：代码事实给文件:行号，运行结果给命令与输出，图片给区域/坐标，外部事实给原始来源；引用逐字，无法复现的按 UNVERIFIED 处理；
+- 不要预设结论分布（不要写「应该全真/应该有问题」）。2026-11-16 的对照显示，这种写法会让 `analyst`
+  把部分成立的命题压成 `TRUE` 并编造引用；中性简报逐字准确。
 - 子任务结论是输入，不是裁决；主模型要抽查引用，重结论轻证据的回报不要直接采纳。
 
-事实核验优先 `reviewer` / `scout`，设计判断用 `analyst`，实现用 `coder`。
+备用链仅在角色配置提供 fallbackModels 时生效；显式配置的角色没写这个字段时，不继承内置链。
+降级与模型未广告预警可并存，预检风险使用实际备用路由。
+
+代码定位与事实取证用 `scout`；带验收标准的收口核对用 `reviewer`；设计判断用 `analyst`。实现任务已有结构化计划或规格时用 `coder`（路径随简报给出），未形成计划的可先派 `planner`。
 
 ## 4. 配置
 
@@ -150,7 +150,7 @@ dsh --profile web --dump-config | grep -A1 dsh-rolegroup   # 应出现 - id: dsh
 ```jsonc
 "analyst": {
   "provider": "qwen-token-plan-cn",
-  "model": "qwen4-max",
+  "model": "qwen3.8-max",
   "fallbackModels": ["deepseek-account/deepseek-flash", "deepseek-official/deepseek-flash", "deepseek-official/deepseek-v4-pro"]
 }
 ```
@@ -184,18 +184,9 @@ doctor 会写明「主路由 X 不可用，已用内置备用档 Y」。
 
 ```
 dsh-rolegroup doctor — 8 个在册角色
-快照时间 2026-10-25T12:00:00.000Z（0 天前）｜配置来源 (内置默认表)
-
-角色     绑定模型                         provider 模型
-analyst  qwen-token-plan-cn/qwen4-max    ✅       ✅
-planner  kimi-coding/k3.1-pro             ✅       ✅
-coder    kimi-coding/k3.1-pro             ✅       ✅
-reviewer qwen-token-plan-cn/qwen3.8-flash ✅       ✅
-scout    deepseek-official/deepseek-flash ✅       ✅
-scribe   qwen-token-plan-cn/qwen3.8-flash ✅       ✅
-vision   qwen-token-plan-cn/qwen3.8-flash ✅       ✅
-fallback deepseek-official/deepseek-flash ✅       ✅
-
+analyst  qwen-token-plan-cn/qwen3.8-max    ✅  ✅
+planner  kimi-coding/k3.1-pro              ✅  ✅
+…
 ✅ 无异常
 ```
 
@@ -204,21 +195,16 @@ fallback deepseek-official/deepseek-flash ✅       ✅
 ## 7. 开发
 
 ```sh
-npm run link:deps     # 首次 clone 后先跑：建 schemastery 软链
-npm install           # 再装 devDependency esbuild
-npm test              # 离线 smoke test，158 项；pretest 会自动跑 link:deps
-npm run build:client  # 改了 src/client/** 或 lib/roles.js 后重建 lib/client.js
+npm install --omit=peer  # 装 devDependency esbuild，不把 schemastery 装成真实副本
+npm run link:deps        # 把部署树的 schemastery 软链进来
+npm test                 # 离线 smoke suite（Node 直跑）；pretest 会自动跑 link:deps
+npm run build:client     # 改了 src/client/** 或 lib/roles.js 后重建 lib/client.js
 ```
 
-先跑 `link:deps` 再跑 `npm install`：npm 会把 `@deepseek-ai/schemastery` 这个 peer 装成真实副本，
-顺序反了会挡住软链。如果已经装过，删掉 `node_modules/@deepseek-ai/schemastery` 再跑一次 `link:deps`。
-不跑 `npm install`，`npm test` 会报 `ERR_MODULE_NOT_FOUND: esbuild`。不跑 `link:deps`，dsh 启动时会
-打印 `无法使用部署树的 @deepseek-ai/schemastery …`，插件降级成 host-only：角色工具还能用，设置页
-那一节会缺席。
-
-`link:deps` 是做什么的：插件以 `link:` 形式安装，按 Node 的 realpath 规则，没法直接 import
-`@deepseek-ai/*`；而 settings 要求条目静态导出 schemastery 的 `Config`，不能延迟解析。所以脚本把部署
-树里的 schemastery 软链到本仓库，软链不会提交。
+安装顺序和原因见 §2「从源码安装」。不跑 `npm install`，`npm test` 会报
+`ERR_MODULE_NOT_FOUND: esbuild`。不跑 `link:deps`，dsh 启动时会打印
+`无法使用部署树的 @deepseek-ai/schemastery …`，插件降级成 host-only：角色工具还能用，设置页
+那一节会缺席。`pretest` 虽然自动跑 `link:deps`，但同样不会覆盖已存在的真实副本。
 
 目录：
 
