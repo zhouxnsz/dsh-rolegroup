@@ -102,7 +102,11 @@ graph/team 运行时）。它有值得学的点（**能力矩阵进系统提示*
   或提供 slot。
 - **设置页导航图标走官方 `settings.section.icon` 槽位**（0.2.2-rc.5 起）：registration id 必须等于目标
   section 的 id，缺席时 shell 保留默认齿轮。旧版「打 data-dsh-rg-nav + scoped CSS mask」的装饰 hack 已退役
-  （上游当时没有 icon 槽位）。icon 注册在 apply 期直接做、不受 whileServed 门控；React 取不到时返回 null。
+  （上游当时没有 icon 槽位）。icon 注册在 apply 期做、不受 whileServed 门控；组件是 settings-nav-icon.js
+  导出的真 React 组件（顶层 `import * as React from 'react'`——client 环境不存在全局 React 注入点，
+  上一版那么取导致图标渲染为空，2026-11-19 实证）。index.js 经动态 import 取 NavGlyph 并 catch 兜底，
+  node 测试不加载该模块。**低版本 dsh（< rc.5）上此注册无消费方 = 静默 no-op**，角色功能不受影响，
+  故 engines.dsh 维持 `>=0.2.1-rc.1`、不强制抬到 rc.5。
 - **`engines.dsh` 的 semver 坑**：`>=0.2.1` **不包含** `0.2.1-rc.2`（prerelease 被排除）。插件市场/
   插件管理器按 `engines.dsh` 判兼容，写错会让插件卡片直接显示「异常」并跳过 meta（连图标都不读）。
   当前范围是 `>=0.2.1-rc.1`。

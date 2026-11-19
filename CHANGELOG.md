@@ -26,20 +26,24 @@
 
 - README 中英「本机实测」版本改为 0.2.2-rc.5（`engines.dsh` 保持 `>=0.2.1-rc.1`）。
 - **设置页导航图标改用官方 `settings.section.icon` 槽位注册**（rc.5 新增，contract/slots.d.ts:85），
-  替换旧的「data 属性 + scoped CSS mask」装饰 hack；registration id = section id（`rolegroup`），
-  React 缺席时返回 null（shell 保留默认齿轮）。`src/client/settings-nav-icon.js` 重写为纯函数
-  （`buildNavGlyph` / `renderNavGlyph`），`index.js` 在 apply 期直接注册、不受 whileServed 门控。
+  替换旧的「data 属性 + scoped CSS mask」装饰 hack；registration id = section id（`rolegroup`）。
+  组件是 settings-nav-icon.js 导出的真 React 组件（顶层 `import * as React from 'react'`——client
+  环境不存在全局 React 注入点，第一版那么取导致图标渲染为空，2026-11-19 截图实证后修复）；
+  `index.js` 经动态 import 取 NavGlyph 并 catch 兜底。**低版本 dsh（< rc.5）上该注册无消费方 =
+  静默 no-op**，其余功能不受影响，故 engines.dsh 维持 `>=0.2.1-rc.1`；README 中英头部各加一行说明。
+  浏览器验收通过（2026-11-19 用户确认图标出现）。
 - 新增两条部署树断言（`tests/smoke.mjs`）：① `buildInstanceConfig` 的输出经 rc.5 真实 Config schema
   逐字段解析通过且不含退役键；② 旧键名即使传 `true` 也不改变 `modelSelection` 缺省语义（no-op 锁定）。
   证伪：把 `modelSelectionSettings: false` 塞回实现 → 第 ① 条红。
 - 图标迁移的断言：svg 描述 + size 回落、createElement 展开计数、退役字符串卫生检查、
-  gating 用例改按槽位名分流（icon 恰 1 次、section 延迟 0 次）。AGENTS.md 坑清单同步改写。
+  gating 用例改按槽位名分流 + __dshRgStubImport 桩通道（node 不加载 react 依赖模块）。AGENTS.md 坑清单同步改写。
 
 ### 验证（0.2.2-rc.5 真机）
 
 - 启动报告 8/8 注册，`failed` / `invalid` / `problems` 全空（`~/.dsh/plugins/dsh-rolegroup/last-startup.json`，2026-11-19T02:37:33Z）；
 - schemastery 软链指向部署树 3.19.0，`npm run link:deps` 输出「无需改动」；
-- `npm test` 156 passed；`npm run build:client` 产物无变化（本次未改客户端源码）。
+- `npm test` 158 passed；`npm run build:client` 重建产物含 `require("react")` 与 icon 槽位注册；
+  浏览器实测图标出现（2026-11-19）。
 
 ### 核对过的升级项（均不适用）
 
