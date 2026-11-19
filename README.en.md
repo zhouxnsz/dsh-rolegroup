@@ -7,7 +7,7 @@ instance, so the tool name is the role name.
 The role/category binding is inspired by
 [oh-my-openagent](https://github.com/code-yeongyu/oh-my-openagent) ("omo"); see §9.
 
-> Version **0.12.0** ｜ dsh **≥ 0.2.1-rc.1** (verified on 0.2.2-rc.5) ｜ MIT
+> Version **0.12.1** ｜ dsh **≥ 0.2.1-rc.1** (verified on 0.2.2-rc.5) ｜ MIT
 >
 > The settings-page nav icon only shows on dsh ≥ 0.2.2-rc.5 (the official `settings.section.icon`
 > slot exists from that version); everything else works on older releases.
