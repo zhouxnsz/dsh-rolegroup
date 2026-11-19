@@ -5,7 +5,13 @@
 // rc.5 起上游提供 `settings.section.icon` 槽位（contract/slots.d.ts:85；registration id 必须
 // 等于目标 section 的 id，不匹配则永不渲染；缺席时 shell 保留默认齿轮），故改为正式注册。
 //
-// 纯函数约束：本文件不得触碰 DOM（document/window/observer 一类）——node 测试直接 import。
+// ⚠️ 浏览器侧依赖 React：NavGlyph 必须是真 React 组件且经模块系统 import react——
+// globalThis.React / ctx.react 在 client 环境不存在（上一版那么取导致图标渲染为空，
+// 2026-11-19 用户截图实证）。react 在 bundle 里 external、由 shell seed 解析（build-client.mjs）。
+// node 测试**不得**直接 import 本模块（link: 形态下裸导入 react 必失败）；纯函数部分
+// （buildNavGlyph/NAV_GLYPH_*）经源码文本断言覆盖即可。
+
+import * as React from 'react'
 
 /** rolegroup 线稿（与插件 icon.svg 同款六边形+委派点），16×16 viewBox。 */
 export const NAV_GLYPH_PATHS = [
@@ -44,8 +50,22 @@ export function buildNavGlyph(props = {}) {
 }
 
 /**
- * 把图标描述渲染成真 React 节点（仅在浏览器侧调用；node 测试不触发）。
- * @param {object} React globalThis.React（client 注入环境必有）
+ * 导航图标组件（React function component）。
+ * ⚠️ React **必须经模块系统 import**：client bundle 里 react 是 external，由 shell seed 解析
+ * （与 card.jsx 同款通道）；globalThis.React / ctx.react 在浏览器侧不存在——上一版这么取导致
+ * 图标渲染为空（2026-11-19 用户截图实证）。本文件因此不是零 DOM 依赖模块；node 测试只 import
+ * buildNavGlyph/NAV_GLYPH_* 纯函数部分即可（import 'react' 在 link:deps 软链下可解析）。
+ * @param {{ size?: number, active?: boolean }} props shell 传入的 owner props
+ */
+export function NavGlyph(props) {
+  const g = buildNavGlyph(props)
+  return React.createElement(g.tag, g.props,
+    ...g.children.map((c) => React.createElement(c.tag, c.props)))
+}
+
+/**
+ * 把图标描述渲染成真 React element（供 NavGlyph 与测试共用）。
+ * @param {object} React React 命名空间
  * @param {ReturnType<typeof buildNavGlyph>} glyph
  */
 export function renderNavGlyph(React, glyph) {

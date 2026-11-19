@@ -32,7 +32,7 @@ import {
   presetIdOf,
 } from '../lib/presets.js'
 import { renderBindingsExport } from '../lib/init.js'
-import { NAV_GLYPH_PATHS, buildNavGlyph, renderNavGlyph } from '../src/client/settings-nav-icon.js'
+
 
 // 客户端 controller 的预填 / 「配置文件」按钮会 fetch 宿主接口；单测统一走内存桩，绝不打真实网络。
 const realFetch = globalThis.fetch
@@ -3644,6 +3644,17 @@ await okAsync('controller: provider 未注册 → routeGaps + 一键补齐到默
   assert.deepEqual([row.provider, row.model], ['deepseek-official', 'deepseek-flash'])
 })
 
+// settings-nav-icon.js 现在 import react（浏览器侧真组件），node 不能直接 import 本模块
+// （link: 形态裸导入 react 必失败，2026-11-19 实证）——纯函数部分改为源码求值：剥掉 react import、
+// 把 NavGlyph 体内的 React 换成注入的替身。
+const navIconSrc = readFileSync(fileURLToPath(new URL('../src/client/settings-nav-icon.js', import.meta.url)), 'utf8')
+// ESM → 可求值文本：剥 react import、export 改普通声明，React 作形参注入。
+const navIconFactory = new Function('React', navIconSrc
+  .replace(/^import \* as React from 'react'$/m, '')
+  .replace(/^export (const|function) /gm, '$1 ')
+  + '\nreturn { buildNavGlyph, renderNavGlyph };')
+const { buildNavGlyph, renderNavGlyph } = navIconFactory({ createElement: () => null })
+
 ok('settings-nav-icon: 图标描述为 svg + currentColor 线稿；size 取 owner props（rc.5 槽位版）', () => {
   const glyph = buildNavGlyph({ size: 16 })
   assert.equal(glyph.tag, 'svg')
@@ -3662,6 +3673,14 @@ ok('settings-nav-icon: renderNavGlyph 用 React.createElement 展开 children（
   const node = renderNavGlyph(fakeReact, buildNavGlyph({ size: 16 }))
   assert.equal(node[0], 'svg')
   assert.equal(calls.length, 4, 'svg + 3 个子节点各 createElement 一次')
+})
+
+// 真根因锁（2026-11-19 浏览器截图实证）：React 必须经模块系统 import——globalThis.React /
+// ctx.react 在 client 环境不存在，上一版那么取导致图标渲染为空。
+ok('settings-nav-icon: React 走模块 import，不得回到 globalThis.React 取值', () => {
+  assert.ok(navIconSrc.includes("import * as React from 'react'"), 'settings-nav-icon.js 必须静态 import react')
+  const idxSrc = readFileSync(fileURLToPath(new URL('../src/client/index.js', import.meta.url)), 'utf8')
+  assert.ok(!idxSrc.includes('globalThis.React'), 'index.js 不得再用 globalThis.React 取 React')
 })
 
 // 旧装饰 hack 必须彻底消失（否则是半迁移状态）。
@@ -4052,9 +4071,12 @@ await okAsync('client-bundle: 真实产物的头部渲染出「角色配置 v<�
   // 最小 jsx-runtime 桩：把 JSX 调用变成可遍历的 { type, props } 树。
   const jsx = (type, props) => ({ type, props: props ?? {} })
   // 组件只用到 useEffect（Escape 关闭弹窗）；node 里 window 不存在 → 回调安全返回。
+  // react 桩：NavGlyph 用 React.createElement（产物经 __toESM 归一化后直接取 .createElement）。
   const stubRequire = (name) => name === 'react/jsx-runtime'
     ? { jsx, jsxs: jsx, Fragment: 'Fragment' }
-    : { __stub: name }
+    : name === 'react'
+      ? { default: { createElement: jsx }, createElement: jsx }
+      : { __stub: name }
   const client = captured.factory(stubRequire)
 
   // 假 ctx：让 apply 走完 whileServed → slots.inject → 动态加载 card → slots.register 的完整链。
@@ -4075,7 +4097,8 @@ await okAsync('client-bundle: 真实产物的头部渲染出「角色配置 v<�
     },
     slots: {
       inject: (name, cb) => { injectCb = cb },
-      register: (options, component) => { registered = { options, component } },
+      // icon 通道的异步注册也走这里：按槽位名分流，卡片只认 settings.section。
+      register: (options, component) => { if (options?.name === 'settings.section') registered = { options, component } },
     },
     remote: { session: { modelCatalog: async () => ({ ok: true, value: { groups: [], failures: [] } }) } },
   })
@@ -4207,6 +4230,11 @@ await okAsync('client-index 门控时序：未 serve 不注册、serve 后 slots
       register: (...a) => { calls.slotsRegister.push(a) },
     },
   }
+  // icon 通道的动态 import('./settings-nav-icon.js') 在 node 会 reject（裸导入 react 必失败）——
+  // 与 card.jsx 同款红线。桩一个即时 reject 的同名 specifier 让 async effect 有头地走完失败分支，
+  // 否则未处理的 rejection 会在套件末尾把进程掀翻。
+  const prevLoader = globalThis.__dshRgStubImport
+  globalThis.__dshRgStubImport = () => Promise.reject(new Error('node: no react'))
   srcMod.apply(fakeCtx)
   // ① configForms.get 恰好 1 次，参数是命名空间（=== host 条目 id）
   assert.equal(calls.formGet.length, 1, 'configForms.get 须被调用恰好 1 次（controller 构造）')
@@ -4226,15 +4254,20 @@ await okAsync('client-index 门控时序：未 serve 不注册、serve 后 slots
   assert.equal(typeof injectCb, 'function', 'slots.inject 第二参数须为函数')
   assert.equal(injectCb.constructor.name, 'AsyncFunction', 'inject 回调须为 async 函数')
   // ④ 组件注册延迟到回调内：未触发 whileServed 回调时 settings.section 的 register 为 0；
-  //    导航图标（settings.section.icon）在 apply 期直接注册，恰 1 次。
-  const iconRegs = calls.slotsRegister.filter((a) => a[0]?.name === 'settings.section.icon')
+  //    导航图标注册走异步通道（见上注），node 侧 slotsRegister 恒空属预期。
   const sectionRegs = calls.slotsRegister.filter((a) => a[0]?.name === 'settings.section')
   assert.equal(sectionRegs.length, 0, '卡片组件注册须延迟到 inject 回调内')
-  assert.equal(iconRegs.length, 1, '导航图标须经 slots.register 注册进 settings.section.icon（rc.5 官方槽位）')
-  assert.equal(iconRegs[0][0].id, 'rolegroup', 'icon 的 registration id 必须等于目标 section 的 id')
+  // icon 通道的形状改由源码文本锁死（第 39-45 行）：async effect + 动态 import + 槽位名/id。
+  const idxSrc = readFileSync(fileURLToPath(new URL('../src/client/index.js', import.meta.url)), 'utf8')
+  assert.ok(/ctx\.effect\(\(\) => \{[\s\S]{0,600}?settings\.section\.icon/.test(idxSrc), 'icon 注册须在独立 ctx.effect 内（同步返回带 catch 的 Promise）')
+  assert.ok(idxSrc.includes("import('./settings-nav-icon.js')"), 'icon 组件须经动态 import 取 settings-nav-icon.js')
+  assert.ok(idxSrc.includes("name: 'settings.section.icon'"), 'icon 须注册进 settings.section.icon 槽位')
+  assert.ok(/id:\s*'rolegroup'/.test(idxSrc), "icon 的 registration id 必须等于目标 section 的 id")
   // ⑤ ctx.effect 恰 3 次（词典 + 导航图标注册 + whileServed 门控），标签可辨
   assert.equal(calls.effect.length, 3, 'ctx.effect 须被调用恰好 3 次（词典 + 导航图标注册 + whileServed 门控）')
   assert.ok(calls.localeRegister.length >= 1, '词典必须注册')
+  await flushMicrotasks() // 等 icon effect 的失败分支落定再撤桩
+  globalThis.__dshRgStubImport = prevLoader
 })
 
 await okAsync('client-index: 卡片注册必须带 label（否则 Plugins 页列表行无标题）', async () => {

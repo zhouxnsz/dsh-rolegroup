@@ -14,7 +14,6 @@
 // 值必须与 host 侧条目 id / 命名空间逐字一致。
 
 import { RolegroupCardController } from './controller.js'
-import { buildNavGlyph } from './settings-nav-icon.js'
 import { zh, en } from './locales.js'
 
 /** settings 命名空间 === host Loader 条目 id（`lib/config.js` 的 ROLEGROUP_ENTRY_ID）。 */
@@ -32,19 +31,24 @@ export function apply(ctx) {
   // 设置页导航图标：0.2.2-rc.5 起走官方 `settings.section.icon` 槽位（registration id 必须
   // 等于目标 section 的 id；缺席时 shell 保留默认齿轮）。旧版是 CSS mask 装饰 hack，已退役。
   // 第二参必须是 **React 组件**（shell renderSlot 按 element 语义消费，官方样例同款）；
-  // React 从 client 注入环境取，取不到时返回 null——shell 仍渲染文字标签，不会崩。
-  ctx.effect(() => ctx.slots.register({
-    name: 'settings.section.icon',
-    id: 'rolegroup',
-    order: 30,
-    label: () => t('title'),
-  }, (props) => {
-    const React = globalThis.React ?? ctx.react
-    if (React === undefined) return null
-    const g = buildNavGlyph(props)
-    return React.createElement(g.tag, g.props,
-      ...g.children.map((c) => React.createElement(c.tag, c.props)))
-  }), 'dsh-rolegroup: settings nav icon')
+  // React 经模块系统 import（react 在 bundle 里 external、由 shell seed 解析）——
+  // 浏览器侧不存在全局 React 注入点，上一版靠它取 React 导致渲染为空（2026-11-19 实证）。
+  // node 可导入性红线同 card.jsx：settings-nav-icon.js 顶层 import react，只能经动态 import
+  // 藏在回调内加载（node 测试不触发该回调）。
+  ctx.effect(() => {
+    // 测试桩通道：node 环境裸导入 react 必失败（link: 形态），smoke 用例注入 __dshRgStubImport
+    // 让本 effect 走失败分支。两条兜底缺一不可：
+    //   ① catch——防 unhandledRejection 掀翻 node 进程；
+    //   ② .then(register) 而非 await——async effect 的 Promise 若先 reject、cordis 同步期又没
+    //      挂上 disposer，调用方会撞 "disposer is not a function"（2026-11-19 套件实证）。
+    const loadNavGlyph = globalThis.__dshRgStubImport ?? (() => import('./settings-nav-icon.js'))
+    return loadNavGlyph().catch(() => undefined).then((mod) => mod === undefined ? undefined : ctx.slots.register({
+        name: 'settings.section.icon',
+        id: 'rolegroup',
+        order: 30,
+        label: () => t('title'),
+      }, mod.NavGlyph))
+  }, 'dsh-rolegroup: settings nav icon')
   // scope 面与旧 settings 作用域同形（getSnapshot/subscribe/mutate/unset），controller 逻辑零改动。
   const controller = new RolegroupCardController(ctx.configForms.get(ROLEGROUP_CLIENT_NS), ctx)
   // 注册为**设置页的一个 section**（`settings.section`；官方 models / agent-presets、第三方皮肤中心 / PET 同款），
