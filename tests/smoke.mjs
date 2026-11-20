@@ -145,6 +145,17 @@ ok('presets: buildRolePresetRows —— 替换 persona 前缀、剔除 delegatio
   assert.equal(BASE_ROWS[0].config.prefix, '部署默认 persona', 'baseRows 不被修改')
 })
 
+ok('presets: 指令与技能 rows 保留', () => {
+  const rows = [...BASE_ROWS]
+  const delegationIndex = rows.findIndex((row) => row.id === DELEGATION_GROUP_ID)
+  rows.splice(delegationIndex, 0,
+    { id: 'skill-filesystem', name: '@deepseek-ai/dsh-skill-filesystem' },
+    { id: 'tool-skill', name: '@deepseek-ai/dsh-tool-skill' },
+  )
+  const built = buildRolePresetRows(rows, PRESET_ROLE)
+  assert.deepEqual(built.map((row) => row.id), ['persona', 'agent-instructions', 'tool-bash', 'skill-filesystem', 'tool-skill'])
+})
+
 ok('presets: baseRows 非法 / 缺 persona 行时兜底追加（v0.6/A1）', () => {
   assert.throws(() => buildRolePresetRows(undefined, PRESET_ROLE), /base preset/)
   assert.throws(() => buildRolePresetRows([], PRESET_ROLE), /base preset/)
@@ -239,6 +250,12 @@ ok('roleAnnouncement: 有降级时追加「运行时降级」段；健康时完�
   assert.ok(degraded.includes('/rolegroup doctor'), '降级提示必须指向 doctor（模型据此告知用户怎么修）')
   assert.equal(degraded.includes('`coder`'), false, '降级段不得用反引号包角色名（既有断言靠它判断在册列表）')
   assert.equal(degraded.includes('其余角色不受影响'), false, '零角色或只剩一个角色时，该保证是假话')
+})
+
+ok('roleAnnouncement: 对话历史与项目能力边界', () => {
+  const { roles } = mergeRoles(undefined)
+  const text = roleAnnouncement(roles)
+  assert.ok(text.includes('角色不继承父会话的对话历史或已加载的技能正文，项目指令与技能目录由角色 preset 按子会话 cwd 重新组合，简报仍须自包含'), text)
 })
 
 ok('roleAnnouncement: 零角色 + 降级只输出在册状态与排障入口；零角色且无降级返回空串', () => {

@@ -6,7 +6,7 @@ dsh 的角色化委派插件。先定义角色（名字、绑定模型、persona
 角色/类别绑定的思路参考了 [oh-my-openagent](https://github.com/code-yeongyu/oh-my-openagent)（omo），
 详见 §9。
 
-> 版本 **0.12.1** ｜ 要求 dsh **≥ 0.2.1-rc.1**（本机实测 0.2.2-rc.5）｜ MIT
+> 版本 **0.12.2** ｜ 要求 dsh **≥ 0.2.1-rc.1**（本机实测 0.2.2-rc.5）｜ MIT
 >
 > 设置页导航图标只在 dsh ≥ 0.2.2-rc.5 上显示（官方 `settings.section.icon` 槽位从该版本起提供）；
 > 低版本其余功能不受影响。
@@ -128,7 +128,7 @@ dsh --profile web --dump-config | grep -A1 dsh-rolegroup   # 应出现 - id: dsh
 
 ### 委派质量
 
-角色不继承父会话上下文，简报越具体，返回越可用。插件在系统提示里给主模型一段固定模板：
+角色不继承父会话的对话历史或已加载的技能正文；项目 `AGENTS.md` 和技能目录由角色 preset 按子会话 cwd 重新组合，简报仍需自包含。简报越具体，返回越可用。插件在系统提示里给主模型一段固定模板：
 
 - 简报至少写：背景、目标、约束、验收、已知事实（文件:行号）、待核验命题；
 - 事实性结论必须有可核验依据：代码事实给文件:行号，运行结果给命令与输出，图片给区域/坐标，外部事实给原始来源；引用逐字，无法复现的按 UNVERIFIED 处理；
@@ -140,6 +140,14 @@ dsh --profile web --dump-config | grep -A1 dsh-rolegroup   # 应出现 - id: dsh
 降级与模型未广告预警可并存，预检风险使用实际备用路由。
 
 代码定位与事实取证用 `scout`；带验收标准的收口核对用 `reviewer`；设计判断用 `analyst`。实现任务已有结构化计划或规格时用 `coder`（路径随简报给出），未形成计划的可先派 `planner`。
+
+#### 与规格驱动工作流配合
+
+以下是使用约定，不是插件内置的 OpenSpec 集成。
+
+- OpenSpec 示例：主会话把 `status` 返回的 `changeRoot`，以及 `instructions apply` 返回的 `contextFiles`、必需 context、任务的 `sourcePath` / `line` 等交给 `coder`，不要只给 change 名；
+- 多个 `coder` 并行时，主会话独占任务状态文件的勾选，`coder` 只改代码和测试；串行使用单个 `coder` 时，可由它按 apply 技能勾选；
+- `openspec validate <change> --strict` 只做结构检查，不替代 verify，也不能证明 specs 没被修改；specs 差异应看 `git diff`。
 
 ## 4. 配置
 

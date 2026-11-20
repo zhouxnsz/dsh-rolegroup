@@ -7,7 +7,7 @@ instance, so the tool name is the role name.
 The role/category binding is inspired by
 [oh-my-openagent](https://github.com/code-yeongyu/oh-my-openagent) ("omo"); see §9.
 
-> Version **0.12.1** ｜ dsh **≥ 0.2.1-rc.1** (verified on 0.2.2-rc.5) ｜ MIT
+> Version **0.12.2** ｜ dsh **≥ 0.2.1-rc.1** (verified on 0.2.2-rc.5) ｜ MIT
 >
 > The settings-page nav icon only shows on dsh ≥ 0.2.2-rc.5 (the official `settings.section.icon`
 > slot exists from that version); everything else works on older releases.
@@ -137,8 +137,7 @@ See **[MODELS.en.md](./MODELS.en.md)** for the built-in default model per role.
 
 ### Delegation quality
 
-Roles do not inherit the parent's context; the more specific the brief, the more usable the result. The
-plugin gives the main model a fixed template in the system prompt:
+Roles do not inherit the parent session's conversation history or the bodies of skills already loaded there. The role preset recomposes the project `AGENTS.md` instructions and skill catalog for the child session's cwd, so the brief still needs to be self-contained. The more specific the brief, the more usable the result. The plugin gives the main model a fixed template in the system prompt:
 
 - A brief should state: background, goal, constraints, acceptance, known facts (`file:line`), claims to verify;
 - Factual conclusions need verifiable evidence: `file:line` for code, command and output for runtime results,
@@ -155,6 +154,14 @@ without that field does not inherit the built-in chain.
 The degraded and model-unadvertised warnings can coexist, and preflight risk names the actual fallback route.
 
 Use `scout` for code location and fact-finding, `reviewer` for acceptance-criteria closing review, and `analyst` for design judgement. For implementation, use `coder` when a structured plan or spec already exists (with its path supplied in the brief); if no plan has been formed, you may delegate to `planner` first.
+
+#### Working with specification-driven workflows
+
+These are usage conventions, not a built-in OpenSpec integration.
+
+- For OpenSpec, the main session should pass `coder` the `changeRoot` returned by `status`, plus the `contextFiles`, required context, and each task's `sourcePath` / `line` returned by `instructions apply`, rather than only the change name;
+- When several `coder` agents run in parallel, only the main session checks off items in task status files; each `coder` changes code and tests only. With one `coder` working serially, it can check items off as directed by the apply skill;
+- `openspec validate <change> --strict` checks structure. It does not replace verify or prove that specs were left unchanged; inspect `git diff` for spec changes.
 
 ## 4. Configuration
 

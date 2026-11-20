@@ -9,6 +9,35 @@
 
 ---
 
+## [0.12.2] — 2026-11-20
+
+### Fixed
+
+- 角色公告此前写「角色不继承你的上下文」，容易把「不继承父会话对话」误读成「没有 AGENTS.md 和技能目录」。
+  现明确：角色不继承父会话的对话历史或已加载的技能正文；项目指令与技能目录由角色 preset 按子会话 cwd
+  重新组合，简报仍须自包含。README 中英同步澄清。
+
+### Added
+
+- 新增两条离线回归断言：① 角色 preset 保留 `agent-instructions`、`skill-filesystem` 和 `tool-skill`，只剔除
+  delegation 组；② 公告逐字保留上述上下文边界。
+- README 中英新增「与规格驱动工作流配合」用法：OpenSpec 的 `status` / `instructions apply` 输入如何交给
+  coder、并行 coder 时主会话独占任务状态勾选、`validate` 不能替代 verify 或 specs diff。这里记录的是使用约定，
+  不是新增 OpenSpec 集成功能。
+
+### 验证
+
+- `npm test` 160 passed；`npm run build:client` 重建成功；`git diff --check` 通过。
+- 证伪：临时过滤 `tool-skill` → preset 断言变红；临时改回公告旧句 → 公告断言变红；恢复后全绿。
+- 独立 reviewer 核对无阻塞项；其指出的 `changeRoot`（来自 `status`）与 `contextFiles` / 任务位置（来自
+  `instructions apply`）归属问题已修正。
+
+Clarifies that role children do not inherit parent conversation history or loaded skill bodies, while project
+instructions and skill catalogs are recomposed from the role preset for the child cwd. Adds regression coverage and
+bilingual guidance for specification-driven workflows.
+
+---
+
 ## [0.12.1] — 2026-11-19
 
 ### Fixed
