@@ -3,3 +3,4 @@ node_modules/
 AGENTS.local.md
 dsh-rolegroup.code-workspace
 STYLE.md
+artifacts/

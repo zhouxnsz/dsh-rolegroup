@@ -180,7 +180,7 @@ ok('buildInstanceConfig: dsh 0.2.1 形状 —— agentPreset 成对 + maxDepth:1
   assert.deepEqual(config, {
     provider: 'spawn',
     toolName: 'analyst',
-    agentOptions: { provider: 'qwen-token-plan-cn', model: 'qwen3.8-max' },
+    agentOptions: { provider: 'qwen-token-plan-cn', model: 'qwen4-max' },
     agentPreset: 'rolegroup-analyst',
     allowedAgentPresets: ['rolegroup-analyst'],
     maxDepth: 1, // 顶层可委派、角色不可再委派（resolveChildDepth 语义实证）
@@ -212,7 +212,7 @@ await okAsync('buildInstanceConfig: rc.5 部署树 schema 对实例配置的接�
   assert.equal(parsed.modelSelection, false, '缺省即 false——不再需要显式传旧键')
   assert.equal(parsed.agentPreset, 'rolegroup-analyst')
   assert.deepEqual(parsed.allowedAgentPresets, ['rolegroup-analyst'])
-  assert.deepEqual(parsed.agentOptions, { provider: 'qwen-token-plan-cn', model: 'qwen3.8-max' })
+  assert.deepEqual(parsed.agentOptions, { provider: 'qwen-token-plan-cn', model: 'qwen4-max' })
   assert.equal(Object.hasOwn(parsed, 'modelSelectionSettings'), false, 'schema 输出不得带已退役键')
 })
 
@@ -1749,7 +1749,7 @@ ok('settings-table: rolesToSection 内置表 → 7 项、首项 analyst 四字�
   const first = section.roles[0]
   assert.equal(first.toolName, 'analyst')
   assert.equal(first.provider, 'qwen-token-plan-cn')
-  assert.equal(first.model, 'qwen3.8-max')
+  assert.equal(first.model, 'qwen4-max')
   assert.ok(!('readonly' in first), 'v0.5 起 section 不得再带 readonly')
   assert.ok(typeof first.persona === 'string' && first.persona.length > 0, 'persona 必须带出')
   assert.ok(typeof first.summary === 'string' && first.summary.length > 0, 'summary 必须带出')
@@ -2160,7 +2160,7 @@ await okAsync('compose 重构等价性：启动快照字段形状与 registered 
     assert.equal(report.registered.length, BUILTIN_COUNT)
     assert.deepEqual(report.registered.map((r) => r.toolName), Object.keys(DEFAULT_ROLES))
     // v0.5：registered[] 不再带 readonly（红线 3 的显式例外，见 lib/index.js writeReport）
-    assert.deepEqual(report.registered[0], { toolName: 'analyst', provider: 'qwen-token-plan-cn', model: 'qwen3.8-max' })
+    assert.deepEqual(report.registered[0], { toolName: 'analyst', provider: 'qwen-token-plan-cn', model: 'qwen4-max' })
     for (const entry of report.registered) assert.deepEqual(Object.keys(entry).sort(), ['model', 'provider', 'toolName'])
     assert.deepEqual(report.failed, [])
     assert.deepEqual(report.invalid, [])
@@ -3196,31 +3196,45 @@ const SECTION_ALL = () => rolesToSection(mergeRoles(undefined).roles) // 全量�
 
 function makeFakeScope({ value, base, user, revision = 3, writable = true, status = 'ready' }) {
   let snapshot = { status, value, base, user, revision, writable, mode: 'host' }
+  let mutateImplementation
   const listeners = new Set()
   const calls = { mutate: [], unset: [] }
   const clone = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)))
   const notify = () => { for (const cb of [...listeners]) cb() }
+  const commit = (ops) => {
+    const next = clone(snapshot.value) ?? {}
+    let nextUser = clone(snapshot.user)
+    for (const op of ops) {
+      const path = op.path.join('/')
+      if (op.op === 'set') {
+        next[path] = clone(op.value)
+        nextUser = { ...(nextUser ?? {}), [path]: clone(op.value) }
+      } else { // unset → 清用户层该路径，解析值回落 base
+        const fallback = clone(snapshot.base?.[path])
+        if (fallback === undefined) delete next[path]
+        else next[path] = fallback
+        if (nextUser !== undefined) delete nextUser[path]
+      }
+    }
+    snapshot = { ...snapshot, value: next, user: nextUser, revision: snapshot.revision + 1 }
+    notify()
+  }
   return {
     calls,
     getSnapshot: () => snapshot,
     subscribe: (cb) => { listeners.add(cb); return () => listeners.delete(cb) },
     mutate: async (ops, expectedRevision) => {
       calls.mutate.push({ ops: clone(ops), expectedRevision })
-      const next = clone(snapshot.value) ?? {}
-      let nextUser = clone(snapshot.user)
-      for (const op of ops) {
-        const path = op.path.join('/')
-        if (op.op === 'set') {
-          next[path] = clone(op.value)
-          nextUser = { ...(nextUser ?? {}), [path]: clone(op.value) }
-        } else { // unset → 清用户层该路径，解析值回落 base
-          const fallback = clone(snapshot.base?.[path])
-          if (fallback === undefined) delete next[path]
-          else next[path] = fallback
-          if (nextUser !== undefined) delete nextUser[path]
-        }
-      }
-      snapshot = { ...snapshot, value: next, user: nextUser, revision: snapshot.revision + 1 }
+      if (mutateImplementation) return mutateImplementation(clone(ops), expectedRevision, () => commit(ops))
+      commit(ops)
+    },
+    setMutateImplementation(implementation) { mutateImplementation = implementation },
+    setWritable(nextWritable) {
+      snapshot = { ...snapshot, writable: nextWritable }
+      notify()
+    },
+    setStatus(nextStatus) {
+      snapshot = { ...snapshot, status: nextStatus }
       notify()
     },
     unset: async (field) => {
@@ -3264,7 +3278,7 @@ ok('controller: 投影初始态——available/writable 取自 scope、rows=生�
   const first = proj.rows[0]
   assert.equal(first.toolName, 'analyst')
   assert.equal(first.provider, 'qwen-token-plan-cn')
-  assert.equal(first.model, 'qwen3.8-max')
+  assert.equal(first.model, 'qwen4-max')
   assert.ok(!('readonly' in first), 'v0.5 起投影行不得再带 readonly')
   assert.ok(typeof first.persona === 'string' && first.persona.length > 0, 'persona 必须投影')
   assert.ok(typeof first.summary === 'string' && first.summary.length > 0, 'summary 必须投影')
@@ -3369,7 +3383,7 @@ await okAsync('controller: catalog 懒加载 + 合并——ready/partial、已�
   assert.ok(kimi.models.some((m) => m.id === 'k3' && m.available === true), '目录内路由必须标 available:true')
   const qwen = proj.catalog.groups.find((g) => g.id === 'qwen-token-plan-cn')
   assert.ok(qwen, '已存 provider 不在目录时必须保留该组（不静默丢配置）')
-  assert.ok(qwen.models.some((m) => m.id === 'qwen3.8-max' && m.available === false), JSON.stringify(qwen))
+  assert.ok(qwen.models.some((m) => m.id === 'qwen4-max' && m.available === false), JSON.stringify(qwen))
   assert.ok(notices.length >= 1, '投影变化必须通知订阅者')
 })
 
@@ -3389,8 +3403,9 @@ ok('controller: 接管态 rows = 整张生效表（含未覆盖的内置角色�
   assert.equal(snap.dirty, false, '补全不得把自己算成「有改动」')
 })
 
-ok('controller: 历史遗留的「显式无链」内置行会被补回内置链（v0.8/AC-5）', () => {
-  // 真实场景：0.7.0 之前面板保存的 7 行没有 fallbackModels（面板层当时不携带链）→ 一直是"显式无链"。
+ok('controller: 历史遗留的「fallbackModels 字段缺失」内置行会被补回内置链（v0.8/AC-5）', () => {
+  // 真实场景：0.7.0 之前面板保存的 7 行没有 fallbackModels（面板层当时不携带链）→ 字段缺失。
+  // 显式 fallbackModels:[] 是另一种用户语义，不得走这条历史迁移。
   const legacy = SECTION_ALL().roles
     .filter((r) => r.toolName !== 'vision')
     .map((r) => { const { fallbackModels: _dropped, ...rest } = r; return rest })
@@ -3525,6 +3540,673 @@ ok('controller: 未接管时 rows 直接来自内置表（客户端自带 DEFAUL
   assert.deepEqual(rows.map((r) => r.toolName), Object.keys(DEFAULT_ROLES), '未接管必须直接渲染内置表')
   assert.equal(rows.length, BUILTIN_COUNT)
   assert.equal(fetched, 0, '未接管时不得再请求宿主（配置文件层已删除）')
+})
+
+// --- role-settings-ui-0.13.0 / T1：selection、跨角色草稿与逐行 modified（AC-01..06）---
+function assertRoleSelection(proj) {
+  if (proj.selectedRow === null) assert.equal(proj.selectedToolName, null)
+  else {
+    assert.equal(proj.selectedRow.toolName, proj.selectedToolName)
+    assert.ok(proj.rows.some((row) => row.toolName === proj.selectedToolName), '选中项必须属于可见 rows')
+  }
+}
+
+ok('role-settings-ui-0.13.0/T1-1: 默认 analyst，8 个内置角色均可选择且表单数据不串（AC-01）', () => {
+  const section = SECTION_ALL()
+  const face = new RolegroupCardController(
+    makeFakeScope({ value: section, base: SECTION_ALL() }), IDLE_CTX(),
+  ).inject()
+  let proj = face.hooks.rolegroupCard.getSnapshot()
+  assert.equal(proj.selectedToolName, 'analyst')
+  assert.equal(proj.selectedRow, proj.rows[0])
+  assertRoleSelection(proj)
+  for (const expected of section.roles) {
+    face.selectRole(expected.toolName)
+    proj = face.hooks.rolegroupCard.getSnapshot()
+    assertRoleSelection(proj)
+    assert.equal(proj.selectedRow.toolName, expected.toolName)
+    assert.equal(proj.selectedRow.provider, expected.provider)
+    assert.equal(proj.selectedRow.model, expected.model)
+    assert.equal(proj.selectedRow.summary, expected.summary)
+    assert.equal(proj.dirty, false, '单纯选择不得起草稿')
+  }
+})
+
+ok('role-settings-ui-0.13.0/T1-2: analyst/coder 草稿跨切换保留，select 自身不 dirty（AC-02）', () => {
+  const section = SECTION_ALL()
+  const face = new RolegroupCardController(
+    makeFakeScope({ value: section, base: SECTION_ALL() }), IDLE_CTX(),
+  ).inject()
+  face.editRole('analyst', 'summary', 'analyst draft')
+  face.selectRole('coder')
+  face.editRole('coder', 'model', 'coder-draft-model')
+  face.selectRole('analyst')
+  let proj = face.hooks.rolegroupCard.getSnapshot()
+  assert.equal(proj.selectedRow.summary, 'analyst draft')
+  assert.equal(proj.rows.find((row) => row.toolName === 'coder').model, 'coder-draft-model')
+  assert.equal(proj.rows.find((row) => row.toolName === 'planner').summary,
+    section.roles.find((row) => row.toolName === 'planner').summary)
+  face.selectRole('coder')
+  proj = face.hooks.rolegroupCard.getSnapshot()
+  assert.equal(proj.selectedRow.model, 'coder-draft-model')
+  assert.equal(proj.rows.find((row) => row.toolName === 'analyst').summary, 'analyst draft')
+  assert.equal(proj.dirtyRoleCount, 2)
+  face.discard()
+  face.selectRole('scribe')
+  assert.equal(face.hooks.rolegroupCard.getSnapshot().dirty, false)
+})
+
+ok('role-settings-ui-0.13.0/T1-3: 新增选中/聚焦/校验，其它草稿不丢；新增后撤销回到 clean（AC-03/04）', () => {
+  const face = new RolegroupCardController(
+    makeFakeScope({ value: SECTION_ALL(), base: SECTION_ALL() }), IDLE_CTX(),
+  ).inject()
+  face.editRole('analyst', 'summary', 'keep me')
+  face.addRole()
+  let proj = face.hooks.rolegroupCard.getSnapshot()
+  assert.equal(proj.selectedToolName, 'role_1')
+  assert.equal(proj.focusToolName, 'role_1')
+  assert.equal(proj.selectedRow.provider, '')
+  assert.equal(proj.selectedRow.model, '')
+  assert.deepEqual(proj.selectedRow.invalidFields, ['provider', 'model'])
+  assert.equal(proj.rows.find((row) => row.toolName === 'analyst').summary, 'keep me')
+  face.selectRole('coder')
+  assert.equal(face.hooks.rolegroupCard.getSnapshot().focusToolName, null)
+  face.selectRole('role_1')
+  assert.equal(face.hooks.rolegroupCard.getSnapshot().selectedRow.toolName, 'role_1')
+
+  const cleanFace = new RolegroupCardController(
+    makeFakeScope({ value: SECTION_ALL(), base: SECTION_ALL() }), IDLE_CTX(),
+  ).inject()
+  cleanFace.addRole()
+  cleanFace.removeRole('role_1')
+  proj = cleanFace.hooks.rolegroupCard.getSnapshot()
+  assert.equal(proj.dirty, false)
+  assert.equal(proj.dirtyRoleCount, 0)
+  assert.equal(proj.selectedToolName, Object.keys(DEFAULT_ROLES).at(-1))
+})
+
+ok('role-settings-ui-0.13.0/T1-4: 自定义 rename 跟 selection/origin，逐行 dirty 仍只算一个（AC-03/06）', () => {
+  const face = new RolegroupCardController(
+    makeFakeScope({ value: SECTION_ALL(), base: SECTION_ALL() }), IDLE_CTX(),
+  ).inject()
+  face.addRole()
+  face.editRole('role_1', 'provider', 'kimi-coding')
+  face.editRole('role_1', 'model', 'k3.1-pro')
+  face.editRole('role_1', 'toolName', 'renamed_role')
+  const proj = face.hooks.rolegroupCard.getSnapshot()
+  assert.equal(proj.selectedToolName, 'renamed_role')
+  assert.equal(proj.selectedRow.provider, 'kimi-coding')
+  assert.equal(proj.dirtyRoleCount, 1)
+  assert.equal(proj.rows.find((row) => row.toolName === 'renamed_role').modified, true)
+})
+
+ok('role-settings-ui-0.13.0/T1-5: 删除非当前/中间/末项/唯一行时选择规则精确（AC-04/05）', () => {
+  const customRoles = [
+    { toolName: 'one', provider: 'p1', model: 'm1' },
+    { toolName: 'two', provider: 'p2', model: 'm2' },
+    { toolName: 'three', provider: 'p3', model: 'm3' },
+  ]
+  const makeFace = () => new RolegroupCardController(makeFakeScope({
+    value: { enabled: true, roles: [...SECTION_ALL().roles, ...customRoles] }, base: SECTION_ALL(),
+  }), IDLE_CTX()).inject()
+  let face = makeFace()
+  face.selectRole('one')
+  face.removeRole('three')
+  assert.equal(face.hooks.rolegroupCard.getSnapshot().selectedToolName, 'one')
+  face = makeFace()
+  face.selectRole('two')
+  face.removeRole('two')
+  assert.equal(face.hooks.rolegroupCard.getSnapshot().selectedToolName, 'three')
+  face = makeFace()
+  face.selectRole('three')
+  face.removeRole('three')
+  assert.equal(face.hooks.rolegroupCard.getSnapshot().selectedToolName, 'two')
+  face = new RolegroupCardController(makeFakeScope({
+    value: { roles: [customRoles[0]] }, base: SECTION_ALL(),
+  }), IDLE_CTX()).inject()
+  face.removeRole('one')
+  const proj = face.hooks.rolegroupCard.getSnapshot()
+  assert.deepEqual(proj.rows, [])
+  assert.equal(proj.selectedRow, null)
+  assert.equal(proj.selectedToolName, null)
+})
+
+ok('role-settings-ui-0.13.0/T1-6: controller 对内置 removeRole 直接 no-op（AC-04）', () => {
+  const face = new RolegroupCardController(
+    makeFakeScope({ value: SECTION_ALL(), base: SECTION_ALL() }), IDLE_CTX(),
+  ).inject()
+  face.selectRole('coder')
+  face.removeRole('coder')
+  const proj = face.hooks.rolegroupCard.getSnapshot()
+  assert.ok(proj.rows.some((row) => row.toolName === 'coder'))
+  assert.equal(proj.selectedToolName, 'coder')
+  assert.equal(proj.dirty, false)
+})
+
+ok('role-settings-ui-0.13.0/T1-7: 外部删除当前名字与冲突草稿均修复 selection，discard 后再修复（AC-05）', () => {
+  const initial = { roles: [
+    { toolName: 'one', provider: 'p1', model: 'm1' },
+    { toolName: 'two', provider: 'p2', model: 'm2' },
+  ] }
+  let scope = makeFakeScope({ value: initial, base: SECTION_ALL() })
+  let face = new RolegroupCardController(scope, IDLE_CTX()).inject()
+  face.selectRole('two')
+  scope.advanceExternal({ roles: [initial.roles[0]] })
+  let proj = face.hooks.rolegroupCard.getSnapshot()
+  assert.equal(proj.selectedToolName, 'one')
+  assertRoleSelection(proj)
+
+  scope = makeFakeScope({ value: initial, base: SECTION_ALL() })
+  face = new RolegroupCardController(scope, IDLE_CTX()).inject()
+  face.selectRole('two')
+  face.editRole('two', 'summary', 'conflicted draft')
+  scope.advanceExternal({ roles: [initial.roles[0]] })
+  proj = face.hooks.rolegroupCard.getSnapshot()
+  assert.equal(proj.conflicted, true)
+  assert.equal(proj.selectedToolName, 'two')
+  assertRoleSelection(proj)
+  face.discard()
+  proj = face.hooks.rolegroupCard.getSnapshot()
+  assert.equal(proj.selectedToolName, 'one')
+  assertRoleSelection(proj)
+})
+
+ok('role-settings-ui-0.13.0/T1-8: 配置来源/角色来源/modified 分离（AC-02/06）', () => {
+  const face = new RolegroupCardController(
+    makeFakeScope({ value: SECTION_ALL(), base: SECTION_ALL() }), IDLE_CTX(),
+  ).inject()
+  face.editRole('analyst', 'summary', 'local only')
+  let proj = face.hooks.rolegroupCard.getSnapshot()
+  assert.equal(proj.mode, 'official', 'official 上起草不得提前显示 custom')
+  let row = proj.rows.find((candidate) => candidate.toolName === 'analyst')
+  assert.equal(row.isCustom, false)
+  assert.equal(row.modified, true)
+  assert.equal(proj.dirtyRoleCount, 1)
+  face.addRole()
+  proj = face.hooks.rolegroupCard.getSnapshot()
+  row = proj.rows.find((candidate) => candidate.toolName === 'role_1')
+  assert.equal(row.isCustom, true)
+  assert.equal(row.modified, true)
+  assert.equal(proj.mode, 'official')
+  assert.equal(proj.dirtyRoleCount, 2)
+})
+
+ok('role-settings-ui-0.13.0/T1-9: 外部 revision 冲突后的无 origin foreign 行不计 modified/count（AC-02/06）', () => {
+  const section = SECTION_ALL()
+  const scope = makeFakeScope({ value: section, base: SECTION_ALL() })
+  const controller = new RolegroupCardController(scope, IDLE_CTX())
+  const face = controller.inject()
+  face.editRole('analyst', 'summary', 'local draft')
+  const foreign = { toolName: 'foreign_external', provider: 'ghost-provider', model: 'foreign-model' }
+  scope.advanceExternal({ enabled: true, roles: [...SECTION_ALL().roles, foreign] })
+  let proj = face.hooks.rolegroupCard.getSnapshot()
+  assert.equal(proj.conflicted, true)
+  assert.equal(proj.rows.some((row) => row.toolName === foreign.toolName), false,
+    '公开外部更新路径保留本地 drafts，不会自动并入 foreign row')
+  assert.equal(proj.dirtyRoleCount, 1)
+
+  // 防御性投影夹具：公开 inject 动作无法产生 origin===undefined 的草稿行，故显式把同一外部对象
+  // 放进现有 drafts。这里验证的是 dirtyRoleCount/projection 对 foreign row 的处理，不声称 scope 会这样合并。
+  controller.drafts.set(foreign.toolName, foreign)
+  controller.publish()
+  proj = face.hooks.rolegroupCard.getSnapshot()
+  assert.equal(proj.rows.find((row) => row.toolName === foreign.toolName).modified, false)
+  assert.deepEqual(proj.rows.filter((row) => row.modified).map((row) => row.toolName), ['analyst'])
+  assert.equal(proj.dirtyRoleCount, 1, '无 origin 的 foreign row 不得新增 modified 计数')
+  assert.equal(proj.conflicted, true, 'foreign 夹具不得清掉已有冲突')
+})
+
+// --- role-settings-ui-0.13.0 / T2：fallbackModels 三态与旧路由不变量（AC-07/08/10）---
+await okAsync('role-settings-ui-0.13.0/T2-1: 自定义缺字段在编辑/补齐/保存后仍无 fallbackModels 键（AC-07/10）', async () => {
+  const custom = { toolName: 'custom_plain', provider: 'ghost-provider', model: 'old-model' }
+  const scope = makeFakeScope({
+    value: { enabled: true, roles: [...SECTION_ALL().roles, custom] }, base: SECTION_ALL(),
+  })
+  const face = new RolegroupCardController(scope, makeFakeClientCtx({ ok: true, value: {
+    groups: [{ id: 'deepseek-official', models: [{ id: 'deepseek-flash' }] }],
+    default: { provider: 'deepseek-official', model: 'deepseek-flash' }, failures: [],
+  } })).inject()
+  face.selectRole('custom_plain')
+  assert.equal(Object.hasOwn(face.hooks.rolegroupCard.getSnapshot().selectedRow, 'fallbackModels'), false)
+  face.hooks.rolegroupCard.subscribe(() => {})
+  await flushMicrotasks()
+  face.fillUnavailableRoutes()
+  assert.equal(Object.hasOwn(face.hooks.rolegroupCard.getSnapshot().selectedRow, 'fallbackModels'), false)
+  face.editRole('custom_plain', 'model', 'deepseek-v4-pro')
+  await face.save()
+  await flushMicrotasks()
+  const saved = scope.calls.mutate[0].ops.find((op) => op.path.join('.') === 'roles').value
+    .find((row) => row.toolName === 'custom_plain')
+  assert.equal(Object.hasOwn(saved, 'fallbackModels'), false)
+})
+
+await okAsync('role-settings-ui-0.13.0/T2-2: 自定义显式空链在投影/保存/merge round-trip 后仍为 []（AC-07）', async () => {
+  const custom = { toolName: 'custom_empty', provider: 'kimi-coding', model: 'k3.1-pro', fallbackModels: [] }
+  const scope = makeFakeScope({
+    value: { enabled: true, roles: [...SECTION_ALL().roles, custom] }, base: SECTION_ALL(),
+  })
+  const face = new RolegroupCardController(scope, IDLE_CTX()).inject()
+  let row = face.hooks.rolegroupCard.getSnapshot().rows.find((candidate) => candidate.toolName === 'custom_empty')
+  assert.ok(Object.hasOwn(row, 'fallbackModels'))
+  assert.deepEqual(row.fallbackModels, [])
+  face.editRole('custom_empty', 'summary', 'empty chain draft')
+  await face.save()
+  await flushMicrotasks()
+  const saved = scope.calls.mutate[0].ops.find((op) => op.path.join('.') === 'roles').value
+  row = saved.find((candidate) => candidate.toolName === 'custom_empty')
+  assert.ok(Object.hasOwn(row, 'fallbackModels'))
+  assert.deepEqual(row.fallbackModels, [])
+  const merged = mergeRoles(sectionToFileConfig({ roles: saved }))
+  const roundTrip = rolesToSection(merged.roles).roles.find((candidate) => candidate.toolName === 'custom_empty')
+  assert.ok(Object.hasOwn(roundTrip, 'fallbackModels'))
+  assert.deepEqual(roundTrip.fallbackModels, [])
+})
+
+await okAsync('role-settings-ui-0.13.0/T2-3: 内置显式空链不触历史补链且全链路 round-trip（AC-07）', async () => {
+  const roles = SECTION_ALL().roles
+  roles.find((row) => row.toolName === 'analyst').fallbackModels = []
+  const scope = makeFakeScope({ value: { enabled: true, roles }, base: SECTION_ALL() })
+  const face = new RolegroupCardController(scope, IDLE_CTX()).inject()
+  let row = face.hooks.rolegroupCard.getSnapshot().rows.find((candidate) => candidate.toolName === 'analyst')
+  assert.deepEqual(row.fallbackModels, [])
+  face.editRole('analyst', 'summary', 'explicit empty')
+  await face.save()
+  await flushMicrotasks()
+  const saved = scope.calls.mutate[0].ops.find((op) => op.path.join('.') === 'roles').value
+  assert.deepEqual(saved.find((candidate) => candidate.toolName === 'analyst').fallbackModels, [])
+  const roundTrip = rolesToSection(mergeRoles(sectionToFileConfig({ roles: saved })).roles).roles
+  row = roundTrip.find((candidate) => candidate.toolName === 'analyst')
+  assert.ok(Object.hasOwn(row, 'fallbackModels'))
+  assert.deepEqual(row.fallbackModels, [])
+  assert.deepEqual(roundTrip.find((candidate) => candidate.toolName === 'coder').fallbackModels,
+    DEFAULT_ROLES.coder.fallbackModels, '其它内置多元素链内容与顺序不变')
+})
+
+await okAsync('role-settings-ui-0.13.0/T2-4: 非空自定义链逐项同序，目录不参与过滤排序（AC-07）', async () => {
+  const chain = ['ghost-z/model-b', 'deepseek-account/deepseek-flash', 'ghost-a/model-a']
+  const custom = { toolName: 'custom_chain', provider: 'kimi-coding', model: 'k3.1-pro', fallbackModels: [...chain] }
+  const scope = makeFakeScope({
+    value: { enabled: true, roles: [...SECTION_ALL().roles, custom] }, base: SECTION_ALL(),
+  })
+  const face = new RolegroupCardController(scope, makeFakeClientCtx({ ok: true, value: {
+    groups: [{ id: 'deepseek-account', models: [{ id: 'deepseek-flash' }] }], failures: [],
+  } })).inject()
+  face.hooks.rolegroupCard.subscribe(() => {})
+  await flushMicrotasks()
+  assert.deepEqual(face.hooks.rolegroupCard.getSnapshot().rows.find((row) => row.toolName === 'custom_chain').fallbackModels, chain)
+  face.editRole('custom_chain', 'summary', 'ordered')
+  await face.save()
+  await flushMicrotasks()
+  const saved = scope.calls.mutate[0].ops.find((op) => op.path.join('.') === 'roles').value
+  assert.deepEqual(saved.find((row) => row.toolName === 'custom_chain').fallbackModels, chain)
+  const roundTrip = rolesToSection(mergeRoles(sectionToFileConfig({ roles: saved })).roles).roles
+  assert.deepEqual(roundTrip.find((row) => row.toolName === 'custom_chain').fallbackModels, chain)
+})
+
+await okAsync('role-settings-ui-0.13.0/T2-5: 切选中角色不移除其它行的未知旧 provider/model（AC-08）', async () => {
+  const face = new RolegroupCardController(
+    makeFakeScope({ value: SECTION_ALL(), base: SECTION_ALL() }),
+    makeFakeClientCtx({ ok: true, value: { groups: [{ id: 'kimi-coding', models: [{ id: 'k3.1-pro' }] }], failures: [] } }),
+  ).inject()
+  face.hooks.rolegroupCard.subscribe(() => {})
+  await flushMicrotasks()
+  for (const selected of ['analyst', 'coder', 'vision']) {
+    face.selectRole(selected)
+    const groups = face.hooks.rolegroupCard.getSnapshot().catalog.groups
+    const qwen = groups.find((group) => group.id === 'qwen-token-plan-cn')
+    assert.ok(qwen.models.some((model) => model.id === 'qwen4-max' && model.available === false))
+    assert.ok(qwen.models.some((model) => model.id === 'qwen3.8-flash' && model.available === false))
+  }
+})
+
+await okAsync('role-settings-ui-0.13.0/T2-6: 补齐只改缺口主路由/档位，链与 selection 不变且零 mutate（AC-10）', async () => {
+  const custom = { toolName: 'custom_plain', provider: 'ghost-provider', model: 'old-model' }
+  const scope = makeFakeScope({
+    value: { enabled: true, roles: [...SECTION_ALL().roles, custom] }, base: SECTION_ALL(),
+  })
+  const face = new RolegroupCardController(scope, makeFakeClientCtx({ ok: true, value: {
+    groups: [{ id: 'deepseek-official', models: [{ id: 'deepseek-flash' }] }],
+    default: { provider: 'deepseek-official', model: 'deepseek-flash' }, failures: [],
+  } })).inject()
+  face.hooks.rolegroupCard.subscribe(() => {})
+  await flushMicrotasks()
+  face.selectRole('coder')
+  face.editRole('analyst', 'reasoningEffort', 'legacy-effort')
+  const before = face.hooks.rolegroupCard.getSnapshot()
+  const chains = new Map(before.rows.map((row) => [row.toolName, row.fallbackModels]))
+  face.fillUnavailableRoutes()
+  const after = face.hooks.rolegroupCard.getSnapshot()
+  assert.equal(after.selectedToolName, 'coder')
+  assert.equal(scope.calls.mutate.length, 0)
+  for (const row of after.rows) assert.deepEqual(row.fallbackModels, chains.get(row.toolName))
+  assert.equal(Object.hasOwn(after.rows.find((row) => row.toolName === 'custom_plain'), 'fallbackModels'), false)
+  for (const gap of before.routeGaps) {
+    const row = after.rows.find((candidate) => candidate.toolName === gap.toolName)
+    assert.equal(row.provider, 'deepseek-official')
+    assert.equal(row.model, 'deepseek-flash')
+    assert.equal(row.reasoningEffort, '')
+  }
+})
+
+// --- role-settings-ui-0.13.0 / T3：保存生命周期、失败反馈与草稿保留（AC-11..13）---
+function deferMutation(scope, { commitOnResolve = true } = {}) {
+  let pending
+  scope.setMutateImplementation((_ops, _revision, commit) => new Promise((resolve, reject) => {
+    pending = {
+      resolve: () => { if (commitOnResolve) commit(); resolve() },
+      reject,
+    }
+  }))
+  return {
+    resolve: () => pending.resolve(),
+    reject: (error) => pending.reject(error),
+  }
+}
+
+await okAsync('role-settings-ui-0.13.0/T3-1: deferred save 的 saving/双 op/revision/success/custom 全生命周期（AC-11）', async () => {
+  const section = SECTION_ALL()
+  const scope = makeFakeScope({ value: section, base: SECTION_ALL(), revision: 11 })
+  const face = new RolegroupCardController(scope, IDLE_CTX()).inject()
+  face.selectRole('coder')
+  face.editRole('coder', 'model', 'deferred-model')
+  const deferred = deferMutation(scope)
+  const savingPromise = face.save()
+  let proj = face.hooks.rolegroupCard.getSnapshot()
+  assert.equal(proj.saving, true)
+  assert.equal(proj.saveFeedback, 'saving')
+  assert.equal(typeof savingPromise?.then, 'function', 'inject().save 必须返回可 await 的 Promise')
+  assert.equal(scope.calls.mutate.length, 1)
+  assert.equal(scope.calls.mutate[0].expectedRevision, 11)
+  assert.deepEqual(scope.calls.mutate[0].ops.map((op) => [op.op, op.path]), [
+    ['set', ['enabled']], ['set', ['roles']],
+  ])
+  assert.equal(scope.calls.mutate[0].ops[0].value, true)
+  assert.equal(scope.calls.mutate[0].ops[1].value.length, BUILTIN_COUNT)
+  deferred.resolve()
+  await savingPromise
+  proj = face.hooks.rolegroupCard.getSnapshot()
+  assert.equal(proj.saving, false)
+  assert.equal(proj.succeeded, true)
+  assert.equal(proj.saveFeedback, 'success')
+  assert.equal(proj.dirty, false)
+  assert.equal(proj.mode, 'custom')
+  assertRoleSelection(proj)
+})
+
+await okAsync('role-settings-ui-0.13.0/T3-2: mutate reject 被吞为可见 write error，草稿/选择保留并可重试（AC-12）', async () => {
+  const scope = makeFakeScope({ value: SECTION_ALL(), base: SECTION_ALL() })
+  const face = new RolegroupCardController(scope, IDLE_CTX()).inject()
+  face.selectRole('coder')
+  face.editRole('coder', 'summary', 'do not lose')
+  scope.setMutateImplementation(() => Promise.reject(new Error('disk full')))
+  await face.save()
+  let proj = face.hooks.rolegroupCard.getSnapshot()
+  assert.equal(proj.saving, false)
+  assert.equal(proj.failed, true)
+  assert.equal(proj.failureKind, 'write')
+  assert.equal(proj.saveFeedback, 'write-error')
+  assert.equal(proj.dirty, true)
+  assert.equal(proj.selectedToolName, 'coder')
+  assert.equal(proj.selectedRow.summary, 'do not lose')
+  face.editRole('coder', 'summary', 'retry draft')
+  scope.setMutateImplementation(undefined)
+  await face.save()
+  proj = face.hooks.rolegroupCard.getSnapshot()
+  assert.equal(proj.saveFeedback, 'success')
+  assert.equal(proj.dirty, false)
+  assert.equal(scope.calls.mutate.length, 2)
+})
+
+await okAsync('role-settings-ui-0.13.0/T3-3: SettingsConflictError 与等待中 revision 漂移均保留冲突草稿（AC-12）', async () => {
+  let scope = makeFakeScope({ value: SECTION_ALL(), base: SECTION_ALL() })
+  let face = new RolegroupCardController(scope, IDLE_CTX()).inject()
+  face.editRole('analyst', 'summary', 'conflict rejection')
+  const conflict = new Error('revision mismatch')
+  conflict.name = 'SettingsConflictError'
+  scope.setMutateImplementation(() => Promise.reject(conflict))
+  await face.save()
+  let proj = face.hooks.rolegroupCard.getSnapshot()
+  assert.equal(proj.saving, false)
+  assert.equal(proj.conflicted, true)
+  assert.equal(proj.saveFeedback, 'conflict')
+  assert.equal(proj.selectedRow.summary, 'conflict rejection')
+  assert.equal(proj.dirty, true)
+
+  scope = makeFakeScope({ value: SECTION_ALL(), base: SECTION_ALL() })
+  face = new RolegroupCardController(scope, IDLE_CTX()).inject()
+  face.selectRole('coder')
+  face.editRole('coder', 'summary', 'revision drift')
+  const deferred = deferMutation(scope, { commitOnResolve: false })
+  const savingPromise = face.save()
+  scope.advanceExternal({ ...SECTION_ALL(), roles: SECTION_ALL().roles.map((row) => row.toolName === 'scribe'
+    ? { ...row, summary: 'external change' } : row) })
+  deferred.resolve()
+  await savingPromise
+  proj = face.hooks.rolegroupCard.getSnapshot()
+  assert.equal(proj.conflicted, true)
+  assert.equal(proj.saveFeedback, 'conflict')
+  assert.equal(proj.selectedRow.summary, 'revision drift')
+  assert.equal(proj.dirty, true)
+  assert.equal(scope.calls.mutate.length, 1, '漂移后不得补发第二次写入')
+})
+
+await okAsync('role-settings-ui-0.13.0/T3-4: 本地非法字段给 validation error，零 mutate 且选择不动（AC-12）', async () => {
+  const scope = makeFakeScope({ value: SECTION_ALL(), base: SECTION_ALL() })
+  const face = new RolegroupCardController(scope, IDLE_CTX()).inject()
+  face.addRole()
+  await face.save()
+  const proj = face.hooks.rolegroupCard.getSnapshot()
+  assert.equal(scope.calls.mutate.length, 0)
+  assert.equal(proj.failureKind, 'validation')
+  assert.equal(proj.saveFeedback, 'validation-error')
+  assert.equal(proj.selectedToolName, 'role_1')
+  assert.deepEqual(proj.selectedRow.invalidFields, ['provider', 'model'])
+  assert.equal(proj.dirty, true)
+})
+
+await okAsync('role-settings-ui-0.13.0/T3-5: 起草后不可写仍显示同一草稿，恢复可写后可保存（AC-12）', async () => {
+  const scope = makeFakeScope({ value: SECTION_ALL(), base: SECTION_ALL() })
+  const face = new RolegroupCardController(scope, IDLE_CTX()).inject()
+  face.selectRole('scribe')
+  face.editRole('scribe', 'summary', 'writable draft')
+  scope.setWritable(false)
+  let proj = face.hooks.rolegroupCard.getSnapshot()
+  assert.equal(proj.writable, false)
+  assert.equal(proj.selectedToolName, 'scribe')
+  assert.equal(proj.selectedRow.summary, 'writable draft')
+  await face.save()
+  assert.equal(scope.calls.mutate.length, 0)
+  assert.equal(face.hooks.rolegroupCard.getSnapshot().dirty, true)
+  scope.setWritable(true)
+  await face.save()
+  proj = face.hooks.rolegroupCard.getSnapshot()
+  assert.equal(proj.dirty, false)
+  assert.equal(scope.calls.mutate.length, 1)
+})
+
+await okAsync('role-settings-ui-0.13.0/T3-6: 目录 reject 可文本编辑，重试目录不清草稿（AC-09/12）', async () => {
+  let attempts = 0
+  const ctx = { remote: { session: { modelCatalog: async () => {
+    attempts += 1
+    if (attempts === 1) throw new Error('catalog unavailable')
+    return { ok: true, value: { groups: [{ id: 'kimi-coding', models: [{ id: 'k3.1-pro' }] }], failures: [] } }
+  } } } }
+  const face = new RolegroupCardController(
+    makeFakeScope({ value: SECTION_ALL(), base: SECTION_ALL() }), ctx,
+  ).inject()
+  face.editRole('coder', 'summary', 'catalog draft')
+  face.hooks.rolegroupCard.subscribe(() => {})
+  await flushMicrotasks()
+  let proj = face.hooks.rolegroupCard.getSnapshot()
+  assert.equal(proj.catalog.status, 'error')
+  assert.equal(proj.selectedRow.toolName, 'analyst')
+  assert.equal(proj.rows.find((row) => row.toolName === 'coder').summary, 'catalog draft')
+  face.selectRole('coder')
+  face.editRole('coder', 'model', 'text-fallback-model')
+  await face.retryCatalog()
+  proj = face.hooks.rolegroupCard.getSnapshot()
+  assert.equal(proj.catalog.status, 'ready')
+  assert.equal(proj.selectedToolName, 'coder')
+  assert.equal(proj.selectedRow.summary, 'catalog draft')
+  assert.equal(proj.selectedRow.model, 'text-fallback-model')
+  assert.equal(attempts, 2)
+})
+
+await okAsync('role-settings-ui-0.13.0/T3-7: mutate resolve 但未落地给 write error 且 saving 不卡死（AC-12）', async () => {
+  const scope = makeFakeScope({ value: SECTION_ALL(), base: SECTION_ALL() })
+  const face = new RolegroupCardController(scope, IDLE_CTX()).inject()
+  face.selectRole('planner')
+  face.editRole('planner', 'summary', 'not landed')
+  scope.setMutateImplementation(() => Promise.resolve())
+  await face.save()
+  const proj = face.hooks.rolegroupCard.getSnapshot()
+  assert.equal(proj.saving, false)
+  assert.equal(proj.conflicted, false)
+  assert.equal(proj.failureKind, 'write')
+  assert.equal(proj.saveFeedback, 'write-error')
+  assert.equal(proj.dirty, true)
+  assert.equal(proj.selectedRow.summary, 'not landed')
+})
+
+await okAsync('role-settings-ui-0.13.0/T3-8: restore  deferred/成功/失败均守 roles=[] 与草稿清理时机（AC-13）', async () => {
+  let scope = makeFakeScope({ value: { ...SECTION_ALL(), enabled: true }, base: SECTION_ALL() })
+  let face = new RolegroupCardController(scope, IDLE_CTX()).inject()
+  face.editRole('analyst', 'summary', 'restore success draft')
+  let deferred = deferMutation(scope)
+  let pending = face.restoreOfficial()
+  assert.equal(face.hooks.rolegroupCard.getSnapshot().saving, true)
+  assert.equal(face.hooks.rolegroupCard.getSnapshot().selectedRow.summary, 'restore success draft', 'pending 时不得提前清草稿')
+  deferred.resolve()
+  await pending
+  let proj = face.hooks.rolegroupCard.getSnapshot()
+  assert.deepEqual(scope.calls.mutate[0].ops, [
+    { op: 'set', path: ['enabled'], value: true },
+    { op: 'set', path: ['roles'], value: [] },
+  ])
+  assert.equal(proj.mode, 'official')
+  assert.equal(proj.dirty, false)
+  assert.equal(proj.saveFeedback, 'success')
+  assertRoleSelection(proj)
+
+  scope = makeFakeScope({ value: { ...SECTION_ALL(), enabled: true }, base: SECTION_ALL() })
+  face = new RolegroupCardController(scope, IDLE_CTX()).inject()
+  face.selectRole('coder')
+  face.editRole('coder', 'summary', 'restore failure draft')
+  scope.setMutateImplementation(() => Promise.reject(new Error('restore denied')))
+  await face.restoreOfficial()
+  proj = face.hooks.rolegroupCard.getSnapshot()
+  assert.equal(proj.saving, false)
+  assert.equal(proj.failureKind, 'restore')
+  assert.equal(proj.saveFeedback, 'restore-error')
+  assert.equal(proj.dirty, true)
+  assert.equal(proj.selectedToolName, 'coder')
+  assert.equal(proj.selectedRow.summary, 'restore failure draft')
+})
+
+await okAsync('role-settings-ui-0.13.0/T3-9: saving 中编辑/选择/放弃被挡，dispose 后迟到结算不发布（AC-05/12）', async () => {
+  for (const outcome of ['resolve', 'reject']) {
+    const scope = makeFakeScope({ value: SECTION_ALL(), base: SECTION_ALL() })
+    const controller = new RolegroupCardController(scope, IDLE_CTX())
+    const face = controller.inject()
+    face.selectRole('coder')
+    face.editRole('coder', 'summary', 'pending draft')
+    const deferred = deferMutation(scope, { commitOnResolve: false })
+    let notices = 0
+    face.hooks.rolegroupCard.subscribe(() => { notices += 1 })
+    const pending = face.save()
+    const before = face.hooks.rolegroupCard.getSnapshot()
+    face.editRole('coder', 'summary', 'blocked edit')
+    face.addRole()
+    face.selectRole('analyst')
+    face.discard()
+    const blockedRestore = face.restoreOfficial()
+    assert.equal(typeof blockedRestore?.then, 'function')
+    assert.equal(scope.calls.mutate.length, 1, 'saving 中 restoreOfficial 必须被挡且零新增 mutate')
+    assert.equal(face.hooks.rolegroupCard.getSnapshot().saving, true)
+    assert.equal(face.hooks.rolegroupCard.getSnapshot().selectedToolName, 'coder')
+    assert.equal(face.hooks.rolegroupCard.getSnapshot().selectedRow.summary, 'pending draft')
+    assert.equal(scope.calls.mutate.length, 1)
+    const publishedAtDispose = notices
+    controller.dispose()
+    if (outcome === 'resolve') deferred.resolve()
+    else deferred.reject(new Error('late rejection'))
+    await pending
+    assert.equal(notices, publishedAtDispose, `${outcome} 迟到后不得发布新状态`)
+    assert.equal(face.hooks.rolegroupCard.getSnapshot(), before, 'dispose 后不得替换 store 快照')
+  }
+})
+
+await okAsync('role-settings-ui-0.13.0/T3-10: save 成功后 discard 清 success，保留已落地值与 clean（AC-05/11/13）', async () => {
+  const scope = makeFakeScope({ value: SECTION_ALL(), base: SECTION_ALL() })
+  const face = new RolegroupCardController(scope, IDLE_CTX()).inject()
+  face.editRole('analyst', 'summary', 'landed summary')
+  await face.save()
+  let proj = face.hooks.rolegroupCard.getSnapshot()
+  assert.equal(proj.saveFeedback, 'success')
+  assert.equal(proj.succeeded, true)
+  const landedRevision = scope.getSnapshot().revision
+  face.discard()
+  proj = face.hooks.rolegroupCard.getSnapshot()
+  assert.equal(proj.succeeded, false)
+  assert.equal(proj.saveFeedback, 'clean')
+  assert.equal(proj.conflicted, false)
+  assert.equal(proj.dirty, false)
+  assert.equal(proj.dirtyRoleCount, 0)
+  assert.equal(proj.selectedRow.summary, 'landed summary', 'discard 不得回滚已经落地的值')
+  assert.equal(scope.getSnapshot().revision, landedRevision)
+  assert.equal(scope.calls.mutate.length, 1, 'discard 不得再写')
+})
+
+await okAsync('role-settings-ui-0.13.0/T3-11: success 后新草稿遇外部不同值 revision，清 success 并冲突（AC-05/12）', async () => {
+  const scope = makeFakeScope({ value: SECTION_ALL(), base: SECTION_ALL() })
+  const controller = new RolegroupCardController(scope, IDLE_CTX())
+  const face = controller.inject()
+  face.editRole('analyst', 'summary', 'first landed draft')
+  await face.save()
+  assert.equal(face.hooks.rolegroupCard.getSnapshot().saveFeedback, 'success')
+
+  // 成功保存会 clearDraft。直接调用 controller 已有的 beginDraft() 开一份同值新草稿，
+  // 才能单独观察 onScopeChange 是否清掉旧 success；若先 editRole，markEdited 会提前清 success， mutation 就失去证伪力。
+  controller.beginDraft()
+  controller.publish()
+  let proj = face.hooks.rolegroupCard.getSnapshot()
+  assert.equal(proj.hasDrafts, true)
+  assert.equal(proj.dirty, false)
+  assert.equal(proj.succeeded, true)
+  const external = { ...SECTION_ALL(), enabled: true }
+  external.roles = external.roles.map((row) => row.toolName === 'scribe'
+    ? { ...row, summary: 'external different value' } : row)
+  scope.advanceExternal(external)
+  proj = face.hooks.rolegroupCard.getSnapshot()
+  assert.equal(proj.conflicted, true)
+  assert.equal(proj.succeeded, false, '外部冲突必须撤销旧 success 标志')
+  assert.equal(proj.saveFeedback, 'conflict')
+  assert.equal(proj.dirty, true)
+  assert.equal(proj.selectedToolName, 'analyst')
+  assert.equal(proj.selectedRow.summary, 'first landed draft', '外部不同值不得覆盖本地新草稿')
+  await face.save()
+  assert.equal(scope.calls.mutate.length, 1, 'revision 冲突不得再发第二次 mutate')
+  assert.equal(face.hooks.rolegroupCard.getSnapshot().saveFeedback, 'conflict')
+})
+
+await okAsync('role-settings-ui-0.13.0/T3-12: clean 草稿调 save 严格零 mutate，状态仍 clean（AC-11/12）', async () => {
+  const scope = makeFakeScope({ value: SECTION_ALL(), base: SECTION_ALL() })
+  const face = new RolegroupCardController(scope, IDLE_CTX()).inject()
+  face.addRole()
+  face.removeRole('role_1')
+  const before = face.hooks.rolegroupCard.getSnapshot()
+  assert.equal(before.hasDrafts, true, '新增后撤销保留一份 clean drafts，专门覆盖 !isDirty 早退')
+  assert.equal(before.dirty, false)
+  assert.equal(before.dirtyRoleCount, 0)
+  const revision = scope.getSnapshot().revision
+  await face.save()
+  const after = face.hooks.rolegroupCard.getSnapshot()
+  assert.equal(scope.calls.mutate.length, 0, 'clean 状态不得白写整表')
+  assert.equal(scope.getSnapshot().revision, revision)
+  assert.equal(after.saveFeedback, 'clean')
+  assert.equal(after.succeeded, false)
+  assert.equal(after.dirty, false)
+  assert.deepEqual(after.rows, before.rows)
 })
 
 await okAsync('controller: addRole/removeRole 增删草稿行；非法行（空 provider）投影 invalidFields 且 save 本地拦截（v0.3/AC-26）', async () => {
@@ -3826,6 +4508,27 @@ await okAsync('docs: README.md 与 README.en.md 章节编号 parity（双语防�
   }
 })
 
+ok('docs: README 中英图片引用落到 assets/（防止搬图/改名后公开面出死链）', () => {
+  // 2026-11-27：README 增加品牌 banner 与设置面板截图。这里锁「至少引用一张、alt 非空、文件存在」，
+  // 不锁具体文件名或版式；截图更新时只换文件、不动断言。
+  const root = fileURLToPath(new URL('..', import.meta.url))
+  for (const file of ['README.md', 'README.en.md']) {
+    const md = readFileSync(join(root, file), 'utf8')
+    const refs = [
+      ...[...md.matchAll(/!\[([^\]]*)\]\((assets\/[^)\s]+)\)/g)].map(([, alt, rel]) => ({ alt, rel })),
+      ...[...md.matchAll(/<img\b[^>]*>/g)].map(([tag]) => ({
+        alt: tag.match(/\balt="([^"]*)"/)?.[1] ?? '',
+        rel: tag.match(/\bsrc="([^"]+)"/)?.[1],
+      })).filter((ref) => ref.rel?.startsWith('assets/')),
+    ]
+    assert.ok(refs.length > 0, `${file} 应至少引用一张 assets/ 图片`)
+    for (const { alt, rel } of refs) {
+      assert.ok(alt.trim().length > 0, `${file} 的图片 ${rel} 缺少 alt 文本`)
+      assert.ok(existsSync(join(root, rel)), `${file} 引用的图片不存在：${rel}`)
+    }
+  }
+})
+
 await okAsync('T4：中英 README 与最新变更块同步备用链、预警和证据要求', async () => {
   const root = fileURLToPath(new URL('..', import.meta.url))
   const zhReadme = readFileSync(join(root, 'README.md'), 'utf8')
@@ -4003,14 +4706,12 @@ await okAsync('client-card: 已接管 → 状态行与空态都切到接管语�
   assert.ok(/state\.mode === 'custom' \? ' dsh-rg-statusOn' : ''/.test(card), '状态点必须只在自定义覆盖态点亮')
 })
 
-ok('client-card: 内置角色行不渲染删除按钮（与既有自定义行规则一致，无特殊处理）（v0.8/AC-3）', () => {
+ok('client-card: 内置角色在列表和编辑器都无删除入口（v0.8/AC-3；0.13 真实产物另锁点击路径）', () => {
   const card = readFileSync(fileURLToPath(new URL('../src/client/card.jsx', import.meta.url)), 'utf8')
-  // 删除按钮只在 row.isCustom 时渲染：内置角色（含 vision）走同一分支，天然没有删除按钮。
-  assert.ok(/row\.isCustom \? \(/.test(card), '必须保留 isCustom 分流')
-  const removeGuard = card.indexOf('className="dsh-rg-remove"') // 跳过 CSS 里同名类
-  assert.ok(removeGuard > 0, '必须存在删除按钮节点')
-  const before = card.slice(Math.max(0, removeGuard - 600), removeGuard)
-  assert.ok(before.includes('row.isCustom ? ('), '删除按钮必须被 isCustom 守卫（内置行没有删除入口）')
+  assert.ok(/row\.isCustom \? \(/.test(card), '列表删除必须由 row.isCustom 守卫')
+  assert.ok(card.includes('dsh-rg-remove-list') || card.includes('dsh-rg-removeList'), '列表删除入口类必须存在')
+  assert.ok(/state\.selectedRow\.isCustom \? \(/.test(card), '编辑器删除必须由 selectedRow.isCustom 守卫')
+  assert.ok(card.includes('dsh-rg-removeEditor'), '编辑器删除入口类必须存在')
 })
 
 ok('client-card: card.jsx 全文无硬编码 CJK——所有文案走 t()（v0.3/AC-28）', () => {
@@ -4019,19 +4720,22 @@ ok('client-card: card.jsx 全文无硬编码 CJK——所有文案走 t()（v0.3
   assert.equal(hits, null, `card.jsx 不得出现 CJK 字符（命中 ${hits?.length} 处，如 ${hits?.slice(0, 5)?.join('')}）——文案一律走 t()`)
 })
 
-ok('client-card: 头部与状态行固定，列表在独立容器里滚动（layout/AC-1，v0.11.1 反转旧决策）', () => {
-  // 2026-10-21 曾把滚动交给设置页；2026-11-13 用户截图反馈：角色一多，状态行被整页滚走。
-  // 现在照官方设置页的形态（agent-preset）：根容器 flex 列 + height:100%，内容区 flex:1 自己滚。
+ok('client-card: 双栏工作区含两个滚动区，savebar 在正常流内（layout/AC-1；0.13 迁移）', () => {
   const card = readFileSync(fileURLToPath(new URL('../src/client/card.jsx', import.meta.url)), 'utf8')
   assert.ok(!/\.dsh-rg-card\{[^}]*border/.test(card), 'dsh-rg-card 不得再有外框')
   assert.ok(!/\.dsh-rg-card\{[^}]*padding/.test(card), 'dsh-rg-card 不得再留外框内边距')
-  assert.ok(/\.dsh-rg-card\{[^}]*display:flex[^}]*flex-direction:column/.test(card), '根容器必须是 flex 列，才能让内层占满剩余高度')
+  assert.ok(/\.dsh-rg-card\{[^}]*display:flex[^}]*flex-direction:column/.test(card), '根容器必须是 flex 列')
   assert.ok(/\.dsh-rg-card\{[^}]*height:100%/.test(card), '根容器必须撑满设置页给的高度')
-  assert.ok(/\.dsh-rg-scroll\{[^}]*overflow-y:auto/.test(card), '内容区必须有独立纵向滚动')
-  assert.ok(/\.dsh-rg-scroll\{[^}]*min-height:0/.test(card), 'flex 子项必须 min-height:0，否则滚动不生效')
-  assert.ok(!/\.dsh-rg-scroll\{[^}]*max-height:\s*\d/.test(card), '不得用固定像素高度（换屏幕/字号就坏）')
-  assert.ok(card.includes('className="dsh-rg-scroll"'), '列表区必须真的包在滚动容器里')
-  assert.ok(card.includes('className="dsh-rg-footer"'), '动作区必须在滚动容器外（否则会被一起滚走）')
+  assert.ok(/\.dsh-rg-workspace\{[^}]*flex:1[^}]*min-height:0/.test(card), 'workspace 必须占剩余高度')
+  // 基准布局（宽容器）：滚动区只能靠 flex 撑高，不许写死像素高度。
+  // 窄容器例外见 T4-10：角色条是「换行 + 高度上限 + 纵向滚动」，上限只作用在 @container 里。
+  const baseCss = card.slice(0, card.indexOf('@container (max-width: 720px)'))
+  for (const selector of ['roleListScroll', 'editorScroll']) {
+    assert.ok(new RegExp(`\\.dsh-rg-${selector}\\{[^}]*overflow-y:auto`).test(baseCss), `${selector} 必须独立纵向滚动`)
+    assert.ok(new RegExp(`\\.dsh-rg-${selector}\\{[^}]*min-height:0`).test(baseCss), `${selector} 必须 min-height:0`)
+    assert.ok(!new RegExp(`\\.dsh-rg-${selector}\\{[^}]*max-height:\\s*\\d`).test(baseCss), `${selector} 不得固定像素高度`)
+  }
+  assert.ok(card.includes('<footer className="dsh-rg-savebar">'), '保存栏必须是独立 footer，不能藏在滚动区')
 })
 
 await okAsync('client-bundle: 重建产物仍满足 wrapper 形状且内联 v0.4 注册痕迹（v0.4/AC-17）', async () => {
@@ -4182,12 +4886,13 @@ await okAsync('client-bundle: 真实产物的头部渲染出「角色配置 v<�
   assert.equal(repo.props['aria-label'], zh.githubAria, 'GitHub 链接的可访问名必须走词典')
   assert.ok(nodes.some((node) => node.type === 'span' && node.props?.children === zh.github),
     'GitHub 链接必须渲染 GitHub 文案')
-  assert.ok(nodes.some((node) => node.props?.className === 'dsh-rg-dirty'),
-    '脏标记必须与 GitHub 入口同处头部动作区（dirty=true 时渲染）')
-  // 头部动作区：只剩 GitHub 链接（配置文件查看器已于 v0.11 删除）
+  assert.ok(nodes.some((node) => node.props?.className === 'dsh-rg-sourceDirty'),
+    'dirty=true 时必须在配置来源区渲染独立修改摘要')
+  // 头部动作区只保留 GitHub；dirty 已迁入来源区。
   const actions = nodes.find((node) => node.props?.className === 'dsh-rg-headActions')
   const actionTexts = collectTexts(actions)
   assert.ok(actionTexts.includes(zh.github), '头部必须保留 GitHub 链接')
+  assert.equal(actionTexts.includes(zh.dirtyBadge), false, '头部动作区不得再混放 dirty 状态')
   assert.equal(actionTexts.some((text) => text === '配置文件'), false, '头部不得再有「配置文件」按钮')
   assert.equal(nodes.some((node) => node.type === 'button' && collectTexts(node).includes('配置文件')), false,
     '配置文件查看器已删除，不得再渲染该按钮')
@@ -4216,6 +4921,375 @@ await okAsync('client-bundle: 真实产物的头部渲染出「角色配置 v<�
     '接管态状态行必须带点亮类')
 
 
+})
+
+// --- role-settings-ui-0.13.0 / T4：真实 bundle 的 master–detail、反馈与可访问性 ---
+const renderBundle = readFileSync(fileURLToPath(new URL('../lib/client.js', import.meta.url)), 'utf8')
+let renderCapture
+new Function('window', renderBundle)({ __ModuleLoader__: { load(registration) { renderCapture = registration } } })
+const renderJsx = (type, props) => ({ type, props: props ?? {} })
+const renderClient = renderCapture.factory((name) => name === 'react/jsx-runtime'
+  ? { jsx: renderJsx, jsxs: renderJsx, Fragment: 'Fragment' }
+  : name === 'react'
+    ? { default: { createElement: renderJsx }, createElement: renderJsx }
+    : { __stub: name })
+const renderSection = SECTION_ALL()
+const renderScope = {
+  getSnapshot: () => ({ status: 'ready', value: renderSection, base: renderSection, user: undefined, revision: 1, writable: true, mode: 'host' }),
+  subscribe: () => () => {},
+}
+const { zh: renderZh, en: renderEn } = await import(new URL('../src/client/locales.js', import.meta.url))
+let renderRegistration
+let renderInject
+renderClient.apply({
+  locale: { register() {}, bind: () => (key) => renderZh[key] },
+  effect: (fn) => { const disposer = fn(); return typeof disposer === 'function' ? disposer : () => {} },
+  configForms: {
+    get: () => renderScope,
+    whileServed: (namespaces, register) => { register(new Set(namespaces)); return () => {} },
+  },
+  slots: {
+    inject: (_name, cb) => { renderInject = cb },
+    register: (options, component) => { if (options?.name === 'settings.section') renderRegistration = { options, component } },
+  },
+  remote: { session: { modelCatalog: async () => ({ ok: true, value: { groups: [], failures: [] } }) } },
+})
+await renderInject()
+assert.ok(renderRegistration, 'T4 前置：真实产物必须注册 settings.section')
+
+function collectRenderedText(node, out = []) {
+  if (node === null || node === undefined || typeof node === 'boolean') return out
+  if (typeof node === 'string' || typeof node === 'number') { out.push(String(node)); return out }
+  if (Array.isArray(node)) { for (const child of node) collectRenderedText(child, out); return out }
+  if (typeof node !== 'object') return out
+  const children = node.props?.children
+  if (Array.isArray(children)) for (const child of children) collectRenderedText(child, out)
+  else collectRenderedText(children, out)
+  return out
+}
+
+const renderedTextOf = (node) => collectRenderedText(node).join('')
+const renderBaseProjection = {
+  available: true, writable: true, takeover: false, dirty: true, hasDrafts: true, dirtyRoleCount: 2,
+  saving: false, failed: false, failureKind: null, succeeded: false, conflicted: false,
+  saveFeedback: 'dirty', mode: 'official', overrides: 0, rows: [], selectedToolName: null,
+  selectedRow: null, focusToolName: null,
+  catalog: { status: 'idle', groups: [], partial: false }, routeGaps: [], basePresent: true,
+}
+
+function renderRoleCard(projection, dict = renderZh) {
+  const calls = []
+  const actions = {}
+  for (const name of ['selectRole', 'editRole', 'addRole', 'removeRole', 'save', 'discard', 'restoreOfficial', 'retryCatalog', 'fillUnavailableRoutes']) {
+    actions[name] = (...args) => { calls.push([name, ...args]) }
+  }
+  const tree = renderRegistration.component({
+    t: (key) => dict[key], view: 'page', useRolegroupCard: (selector) => selector(projection), ...actions,
+  })
+  const nodes = []
+  const parents = new Map()
+  const walk = (node, parent = null) => {
+    if (node === null || typeof node !== 'object') return
+    if (Array.isArray(node)) { for (const child of node) walk(child, parent); return }
+    if (typeof node.type === 'function') { walk(node.type(node.props), parent); return }
+    nodes.push(node)
+    parents.set(node, parent)
+    const children = node.props?.children
+    if (Array.isArray(children)) for (const child of children) walk(child, node)
+    else walk(children, node)
+  }
+  walk(tree)
+  return { tree, nodes, parents, calls }
+}
+
+function makeRenderProjection() {
+  const rows = SECTION_ALL().roles.map((row) => ({
+    reasoningEffort: '', persona: '', summary: '', ...row,
+    isCustom: false, modified: false, invalidFields: [],
+  }))
+  return {
+    ...renderBaseProjection,
+    dirty: false, hasDrafts: false, dirtyRoleCount: 0, saveFeedback: 'clean',
+    rows, selectedToolName: 'analyst', selectedRow: rows[0],
+  }
+}
+
+ok('role-settings-ui-0.13.0/T4-1: 真实产物渲染 8 行单列表与单角色表单，coder 点击只 select（AC-01/14）', () => {
+  const { nodes, calls } = renderRoleCard(makeRenderProjection())
+  const selectors = nodes.filter((node) => node.props?.className?.includes('dsh-rg-roleSelect'))
+  assert.equal(selectors.length, BUILTIN_COUNT)
+  assert.deepEqual(selectors.map((node) => node.props['data-tool-name']), Object.keys(DEFAULT_ROLES))
+  assert.equal(selectors[0].props['aria-current'], 'true')
+  assert.equal(nodes.filter((node) => node.type === 'input' && node.props.id?.endsWith('-toolName')).length, 1)
+  assert.equal(nodes.filter((node) => node.type === 'textarea' && node.props.id?.endsWith('-summary')).length, 1)
+  assert.equal(nodes.filter((node) => node.type === 'textarea' && node.props.id?.endsWith('-persona')).length, 1)
+  const coder = selectors.find((node) => node.props['data-tool-name'] === 'coder')
+  coder.props.onClick()
+  assert.deepEqual(calls, [['selectRole', 'coder']])
+})
+
+ok('role-settings-ui-0.13.0/T4-2: 仅 selectedRow 进编辑器，其它角色 modified 仍在列表（AC-01/02/06）', () => {
+  const projection = makeRenderProjection()
+  projection.rows.find((row) => row.toolName === 'coder').modified = true
+  const { nodes } = renderRoleCard(projection)
+  assert.equal(nodes.find((node) => node.props.id === 'dsh-rg-analyst-toolName').props.value, 'analyst')
+  assert.equal(nodes.find((node) => node.props.id === 'dsh-rg-analyst-summary').props.value, projection.selectedRow.summary)
+  const coder = nodes.find((node) => node.props.className?.includes('dsh-rg-roleSelect') && node.props['data-tool-name'] === 'coder')
+  assert.ok(collectRenderedText(coder).includes(renderZh.modifiedBadge))
+  assert.equal(nodes.some((node) => node.props.id === 'dsh-rg-coder-summary'), false)
+})
+
+ok('role-settings-ui-0.13.0/T4-3: 内置双区无删除，自定义列表/编辑器删除不串 selection（AC-04）', () => {
+  let rendered = renderRoleCard(makeRenderProjection())
+  assert.equal(rendered.nodes.filter((node) => node.props.className?.includes('dsh-rg-remove')).length, 0)
+  const projection = makeRenderProjection()
+  const customs = [
+    { toolName: 'custom_one', provider: 'p1', model: 'm1', summary: 'one', persona: '', reasoningEffort: '', isCustom: true, modified: true, invalidFields: [], fallbackModels: [] },
+    { toolName: 'custom_two', provider: 'p2', model: 'm2', summary: 'two', persona: '', reasoningEffort: '', isCustom: true, modified: true, invalidFields: [] },
+  ]
+  projection.rows.push(...customs)
+  projection.selectedToolName = 'custom_one'
+  projection.selectedRow = customs[0]
+  rendered = renderRoleCard(projection)
+  assert.equal(rendered.nodes.filter((node) => node.props.className?.includes('dsh-rg-removeList')).length, 2)
+  assert.equal(rendered.nodes.filter((node) => node.props.className?.includes('dsh-rg-removeEditor')).length, 1)
+  for (const button of rendered.nodes.filter((node) => node.type === 'button')) {
+    let ancestor = rendered.parents.get(button)
+    while (ancestor) {
+      assert.notEqual(ancestor.type, 'button', `button 不得嵌套 button：${button.props.className ?? '(no class)'}`)
+      ancestor = rendered.parents.get(ancestor)
+    }
+  }
+  const noncurrent = rendered.nodes.find((node) => node.props.className?.includes('dsh-rg-removeList') && node.props['data-tool-name'] === 'custom_two')
+  noncurrent.props.onClick()
+  assert.deepEqual(rendered.calls, [['removeRole', 'custom_two']])
+  rendered.nodes.find((node) => node.props.className?.includes('dsh-rg-removeEditor')).props.onClick()
+  assert.deepEqual(rendered.calls.at(-1), ['removeRole', 'custom_one'])
+})
+
+ok('role-settings-ui-0.13.0/T4-4: 备用链 ol 原序只读，空数组/缺字段均有说明（AC-07）', () => {
+  const projection = makeRenderProjection()
+  let rendered = renderRoleCard(projection)
+  let list = rendered.nodes.find((node) => node.type === 'ol' && node.props.className === 'dsh-rg-fallbackList')
+  assert.deepEqual(list.props.children.map((item) => renderedTextOf(item)), DEFAULT_ROLES.analyst.fallbackModels)
+  let section = rendered.nodes.find((node) => node.props.className?.includes('dsh-rg-fallbackSection'))
+  const fallbackNodes = []
+  const collectInside = (node) => {
+    if (node === null || typeof node !== 'object') return
+    if (Array.isArray(node)) { node.forEach(collectInside); return }
+    fallbackNodes.push(node)
+    collectInside(node.props?.children)
+  }
+  collectInside(section.props.children)
+  assert.equal(fallbackNodes.some((node) => ['input', 'button', 'select', 'textarea'].includes(node.type)), false)
+  assert.ok(collectRenderedText(section).includes(renderZh.fallbackReadOnly))
+  for (const fallback of [undefined, []]) {
+    const custom = { toolName: 'custom_empty', provider: 'p', model: 'm', summary: '', persona: '', reasoningEffort: '', isCustom: true, modified: true, invalidFields: [], ...(fallback === undefined ? {} : { fallbackModels: fallback }) }
+    projection.rows.push(custom)
+    projection.selectedToolName = custom.toolName
+    projection.selectedRow = custom
+    rendered = renderRoleCard(projection)
+    assert.ok(renderedTextOf(rendered.tree).includes(renderZh.fallbackEmpty))
+    assert.equal(rendered.nodes.some((node) => node.type === 'ol' && node.props.className === 'dsh-rg-fallbackList'), false)
+    projection.rows.pop()
+  }
+})
+
+ok('role-settings-ui-0.13.0/T4-5: 配置来源、角色来源、modified 三类文案独立（AC-06）', () => {
+  const projection = makeRenderProjection()
+  projection.selectedRow.modified = true
+  let rendered = renderRoleCard(projection)
+  assert.ok(renderedTextOf(rendered.tree).includes(renderZh.statusOfficial))
+  assert.ok(renderedTextOf(rendered.tree).includes(renderZh.roleBuiltin))
+  assert.ok(renderedTextOf(rendered.tree).includes(renderZh.modifiedBadge))
+  const custom = { toolName: 'custom_source', provider: 'p', model: 'm', summary: '', persona: '', reasoningEffort: '', isCustom: true, modified: false, invalidFields: [] }
+  projection.rows.push(custom)
+  projection.selectedToolName = custom.toolName
+  projection.selectedRow = custom
+  projection.mode = 'custom'
+  projection.takeover = true
+  rendered = renderRoleCard(projection)
+  assert.ok(renderedTextOf(rendered.tree).includes(renderZh.statusCustom))
+  assert.ok(renderedTextOf(rendered.tree).includes(renderZh.roleCustom))
+})
+
+ok('role-settings-ui-0.13.0/T4-6: saving/success/validation/write/conflict 保存栏逐态且 saving 全禁用（AC-11/12/14）', () => {
+  const cases = [
+    ['saving', renderZh.statusSaving, 'status'],
+    ['success', renderZh.statusSuccess, 'status'],
+    ['validation-error', renderZh.validationFailed, 'alert'],
+    ['write-error', renderZh.writeFailed, 'alert'],
+    ['restore-error', renderZh.restoreFailed, 'alert'],
+    ['conflict', renderZh.conflicted, 'alert'],
+  ]
+  for (const [saveFeedback, copy, role] of cases) {
+    const projection = { ...makeRenderProjection(), saveFeedback, saving: saveFeedback === 'saving',
+      failed: ['validation-error', 'write-error', 'restore-error'].includes(saveFeedback), conflicted: saveFeedback === 'conflict' }
+    const { nodes } = renderRoleCard(projection)
+    const savebar = nodes.find((node) => node.props.className === 'dsh-rg-savebar')
+    assert.ok(collectRenderedText(savebar).includes(copy), `${saveFeedback} 应显示对应词典文案`)
+    assert.ok(nodes.some((node) => node.props.className === 'dsh-rg-saveFeedback' && node.props.role === role))
+    if (saveFeedback === 'saving') {
+      for (const control of nodes.filter((node) => ['input', 'select', 'textarea', 'button'].includes(node.type))) {
+        assert.equal(control.props.disabled, true, `saving 时 ${control.type}#${control.props.id ?? ''} 必须禁用`)
+      }
+    }
+  }
+})
+
+ok('role-settings-ui-0.13.0/T4-7: label/help/error id 实际关联，invalid 控件同步 aria（AC-14）', () => {
+  const projection = makeRenderProjection()
+  const custom = { toolName: 'custom_fields', provider: '', model: '', summary: '', persona: '', reasoningEffort: 'bogus', isCustom: true, modified: true, invalidFields: ['toolName', 'provider', 'model', 'reasoningEffort'], fallbackModels: [] }
+  projection.rows.push(custom)
+  projection.selectedToolName = custom.toolName
+  projection.selectedRow = custom
+  projection.saveFeedback = 'validation-error'
+  const { nodes } = renderRoleCard(projection)
+  const ids = new Set(nodes.map((node) => node.props.id).filter(Boolean))
+  for (const label of nodes.filter((node) => node.type === 'label')) {
+    assert.ok(ids.has(label.props.htmlFor), `label ${label.props.htmlFor} 必须指向真实控件`)
+  }
+  for (const field of ['toolName', 'provider', 'model', 'reasoningEffort']) {
+    const control = nodes.find((node) => node.props.id === `dsh-rg-custom_fields-${field}`)
+    assert.equal(control.props['aria-invalid'], 'true')
+    const descriptions = control.props['aria-describedby'].split(/\s+/)
+    assert.ok(descriptions.some((id) => id.endsWith(`-${field}-error`)), `${field} 错误 id 未关联`)
+    for (const id of descriptions) assert.ok(ids.has(id), `describedby 目标不存在：${id}`)
+  }
+  const toolName = nodes.find((node) => node.props.id === 'dsh-rg-custom_fields-toolName')
+  assert.ok(toolName.props['aria-describedby'].includes('dsh-rg-custom_fields-toolName-help'))
+  assert.ok(renderedTextOf({ props: { children: nodes } }).includes(renderZh.fieldProviderError))
+})
+
+ok('role-settings-ui-0.13.0/T4-8: autoFocus 仅新自定义工具名，内置工具名 readOnly（AC-03/14）', () => {
+  const projection = makeRenderProjection()
+  let { nodes } = renderRoleCard(projection)
+  let input = nodes.find((node) => node.props.id === 'dsh-rg-analyst-toolName')
+  assert.equal(input.props.readOnly, true)
+  assert.notEqual(input.props.autoFocus, true)
+  const custom = { toolName: 'role_1', provider: '', model: '', summary: '', persona: '', reasoningEffort: '', isCustom: true, modified: true, invalidFields: ['provider', 'model'], fallbackModels: [] }
+  projection.rows.push(custom)
+  projection.selectedToolName = 'role_1'
+  projection.selectedRow = custom
+  projection.focusToolName = 'role_1'
+  ;({ nodes } = renderRoleCard(projection))
+  input = nodes.find((node) => node.props.id === 'dsh-rg-role_1-toolName')
+  assert.equal(input.props.autoFocus, true)
+  assert.notEqual(input.props.readOnly, true)
+  assert.equal(nodes.filter((node) => node.props.autoFocus === true).length, 1)
+})
+
+ok('role-settings-ui-0.13.0/T4-9: 目录外旧主路由保留 option，未知可用性不冒充无推理档位（AC-08/09）', () => {
+  const projection = makeRenderProjection()
+  projection.catalog = { status: 'ready', partial: false, groups: [{ id: 'qwen-token-plan-cn', name: 'Legacy Qwen', models: [{ id: 'qwen4-max', name: 'Legacy max', available: false }] }] }
+  let { nodes } = renderRoleCard(projection)
+  const model = nodes.find((node) => node.props.id === 'dsh-rg-analyst-model')
+  assert.ok(model.props.children.some((option) => option?.props?.value === 'qwen4-max'))
+  const legacy = model.props.children.find((option) => option?.props?.value === 'qwen4-max')
+  assert.ok(renderedTextOf(legacy).includes(renderZh.routeUnavailable))
+  const effort = nodes.find((node) => node.props.id === 'dsh-rg-analyst-reasoningEffort')
+  assert.equal(effort.props.placeholder, renderZh.modelUnavailable)
+  assert.ok(renderedTextOf({ props: { children: nodes } }).includes(renderZh.catalogReadyRoute))
+  projection.catalog = { status: 'ready', partial: false, groups: [{ id: 'qwen-token-plan-cn', name: 'Qwen', models: [{ id: 'qwen4-max', name: 'Max', available: true }] }] }
+  ;({ nodes } = renderRoleCard(projection))
+  assert.equal(nodes.find((node) => node.props.id === 'dsh-rg-analyst-reasoningEffort').props.placeholder,
+    renderZh.reasoningEffortUnsupported)
+})
+
+ok('role-settings-ui-0.13.0/T4-10: 双滚动区外置 savebar，CSS 有窄屏规则且无 fixed/1600px 画布（AC-15）', () => {
+  const { nodes, parents } = renderRoleCard(makeRenderProjection())
+  const footer = nodes.find((node) => node.props.className === 'dsh-rg-savebar')
+  assert.ok(footer)
+  let parent = parents.get(footer)
+  while (parent) {
+    assert.ok(!['dsh-rg-roleListScroll', 'dsh-rg-editorScroll'].includes(parent.props?.className), 'savebar 不得位于滚动区里')
+    parent = parents.get(parent)
+  }
+  assert.ok(nodes.some((node) => node.props.className === 'dsh-rg-workspace'))
+  assert.ok(nodes.some((node) => node.props.className === 'dsh-rg-roleListScroll'))
+  assert.ok(nodes.some((node) => node.props.className === 'dsh-rg-editorScroll'))
+  assert.equal(nodes.find((node) => node.props.id === 'dsh-rg-analyst-summary').props.className,
+    'dsh-rg-summaryInput', '真实 bundle 的 summary 必须带独立高度 class')
+  assert.ok(nodes.some((node) => node.props.className === 'dsh-rg-routeFields'))
+  const card = readFileSync(fileURLToPath(new URL('../src/client/card.jsx', import.meta.url)), 'utf8')
+  const bundle = readFileSync(fileURLToPath(new URL('../lib/client.js', import.meta.url)), 'utf8')
+  for (const selector of ['workspace', 'roleListScroll', 'editorScroll']) {
+    assert.ok(new RegExp(`\\.dsh-rg-${selector}\\{[^}]*min-(?:height|width):0`).test(card), selector)
+  }
+  for (const [sourceName, css] of [['card.jsx', card], ['lib/client.js', bundle]]) {
+    assert.ok(/\.dsh-rg-field textarea\{[^}]*resize:vertical;scrollbar-gutter:stable/.test(css),
+      `${sourceName}: textarea 必须保留纵向 resize 和滚动条 gutter`)
+    assert.ok(/\.dsh-rg-field textarea\.dsh-rg-summaryInput\{[^}]*min-height:140px/.test(css),
+      `${sourceName}: summary 独立高度必须进入产物`)
+    assert.ok(/\.dsh-rg-routeFields\{[^}]*grid-template-columns:repeat\(auto-fit,minmax\(min\(180px,100%\),1fr\)\)/.test(css),
+      `${sourceName}: 主路由必须按容器 auto-fit，不能固定三列挤压`)
+    assert.ok(!/\.dsh-rg-routeFields\{[^}]*repeat\(3,/.test(css), `${sourceName}: 不得退回固定三列`)
+    assert.ok(/\.dsh-rg-actions button:disabled\{[^}]*background:transparent;[^}]*color:var\(--dsw-alias-label-primary\)/.test(css),
+      `${sourceName}: 禁用保存栏按钮必须保留正文对比度`)
+    assert.ok(/\.dsh-rg-card \.dsh-rg-actions button:disabled\{[^}]*cursor:not-allowed/.test(css),
+      `${sourceName}: 禁用动作需要比通用 button:disabled 更高特异度的 not-allowed 光标`)
+    assert.ok(!/\.dsh-rg-card button:disabled[^{}]*\{opacity:\.5/.test(css),
+      `${sourceName}: button 不得再叠全组件 opacity:.5`)
+    assert.ok(/\.dsh-rg-dirty,\.dsh-rg-modified\{[^}]*color:var\(--dsw-alias-label-primary\);border-color:var\(--dsw-alias-state-warn-label\)/.test(css),
+      `${sourceName}: warn 留给边框，badge 正文使用 label-primary`)
+    assert.ok(/\.dsh-rg-routeSummary\{font-size:11px/.test(css), `${sourceName}: routeSummary 使用 11px`)
+    assert.ok(/\.dsh-rg-dirty,\.dsh-rg-chip\{[^}]*font-size:11px/.test(css), `${sourceName}: badge 使用 11px`)
+  }
+  // 断点必须按「卡片容器宽度」而不是视口：设置弹层正文约 600px、视口约 1400px，@media 永不触发。
+  assert.ok(/\.dsh-rg-card\{[^}]*container-type:inline-size/.test(card),
+    'card 必须是容器查询的宿主，否则窄弹层规则不生效')
+  assert.ok(card.includes('@container (max-width: 720px)'), '窄容器断点必须用 @container')
+  assert.ok(card.includes('@container (max-width: 430px)'), '超窄容器断点必须用 @container')
+  assert.equal(/@media \(max-width: 760px\)/.test(card), false,
+    '不得退回视口断点：弹层宽度不随视口变化')
+  const narrowStart = card.indexOf('@container (max-width: 720px)')
+  const narrowEnd = card.indexOf('@container (max-width: 430px)')
+  assert.ok(narrowStart >= 0 && narrowEnd > narrowStart, '必须同时有 720/430 两档容器断点')
+  const narrow = card.slice(narrowStart, narrowEnd)
+  assert.ok(narrow.includes('.dsh-rg-workspace{grid-template-columns:minmax(0,1fr);grid-template-rows:auto'),
+    '窄容器下必须改为「角色条在上、编辑器在下」的单列堆叠')
+  assert.ok(narrow.includes('.dsh-rg-roleList{display:flex;flex-wrap:wrap'),
+    '窄容器下角色条必须换行，不能把后面的角色截在滚动边缘外')
+  assert.ok(narrow.includes('.dsh-rg-roleSelect .dsh-rg-chip{display:none}'),
+    '窄容器下必须隐藏冗余的「内置角色」标签，否则 8 个角色挤不进可见区域')
+  assert.ok(narrow.includes('.dsh-rg-basicFields{grid-template-columns:minmax(0,1fr)}'),
+    '窄容器下基本信息必须单列，摘要才读得出整句')
+  assert.equal(card.includes('position:fixed'), false)
+  assert.equal(/min-width:\s*1600px/.test(card), false)
+})
+
+ok('role-settings-ui-0.13.0/T4-11: 动态错误/状态/备用链新词条中英完整（AC-16）', () => {
+  const keys = ['roleBuiltin', 'roleCustom', 'modifiedBadge', 'selectRole', 'dirtyRoles', 'dirtyRoleOne',
+    'sectionIdentity', 'sectionRouting', 'sectionFallback', 'sectionPersona',
+    'fallbackReadOnly', 'fallbackEmpty', 'toolNameHelp', 'catalogReadyRoute', 'catalogTextRoute',
+    'fieldToolNameError', 'fieldProviderError', 'fieldModelError', 'fieldReasoningEffortError',
+    'statusSaving', 'statusSuccess', 'statusClean', 'statusDirty', 'validationFailed', 'writeFailed',
+    'restoreFailed', 'notWritable']
+  for (const key of keys) {
+    assert.ok(typeof renderZh[key] === 'string' && renderZh[key] !== '', `zh.${key}`)
+    assert.ok(typeof renderEn[key] === 'string' && renderEn[key] !== '', `en.${key}`)
+  }
+  const rendered = renderRoleCard(makeRenderProjection(), renderEn)
+  assert.equal(renderedTextOf(rendered.tree).includes('undefined'), false)
+  const single = { ...makeRenderProjection(), dirty: true, hasDrafts: true, dirtyRoleCount: 1, saveFeedback: 'dirty' }
+  single.selectedRow.modified = true
+  const singleEn = renderRoleCard(single, renderEn)
+  assert.ok(renderedTextOf(singleEn.tree).includes(renderEn.dirtyRoleOne))
+  assert.equal(renderedTextOf(singleEn.tree).includes('1 roles have unsaved changes'), false)
+})
+
+ok('role-settings-ui-0.13.0/T4-12: scope 暂不可用但已有草稿时保留禁用编辑器（AC-12）', () => {
+  const projection = { ...makeRenderProjection(), available: false, hasDrafts: true, dirty: true,
+    dirtyRoleCount: 1, saveFeedback: 'dirty' }
+  projection.selectedRow.summary = 'offline draft'
+  const { nodes } = renderRoleCard(projection)
+  assert.ok(nodes.some((node) => node.props.className === 'dsh-rg-workspace'))
+  const summary = nodes.find((node) => node.props.id === 'dsh-rg-analyst-summary')
+  assert.equal(summary.props.value, 'offline draft')
+  assert.equal(summary.props.disabled, true)
+  assert.equal(renderedTextOf({ props: { children: nodes } }).includes(renderZh.scopeUnavailable), false)
+  const empty = renderRoleCard({ ...projection, hasDrafts: false })
+  assert.equal(empty.nodes.some((node) => node.props.className === 'dsh-rg-workspace'), false)
 })
 
 // --- v0.4 settings 迁移 T5：client apply 时序与门控（plans/v0.4-settings-migration.md D7/T5）---

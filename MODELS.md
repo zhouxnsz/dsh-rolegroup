@@ -4,7 +4,7 @@
 
 | 角色 | 推荐模型 |
 |---|---|
-| `analyst` | `qwen3.8-max` |
+| `analyst` | `qwen4-max` |
 | `planner` | `k3.1-pro` |
 | `coder` | `k3.1-pro` |
 | `reviewer` | `qwen3.8-flash` |

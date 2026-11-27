@@ -25,7 +25,7 @@ function normalizeRow(row) {
     if (typeof value === 'string' && value.trim() !== '') out[field] = value.trim()
   }
   // 备用链：原样随行写回（面板保存 = 显式配置，丢链就再也降不了级）
-  if (Array.isArray(row.fallbackModels) && row.fallbackModels.length > 0) {
+  if (Array.isArray(row.fallbackModels)) {
     out.fallbackModels = [...row.fallbackModels]
   }
   return out
@@ -41,8 +41,9 @@ function fillBuiltinRows(panelRows) {
       remaining.delete(toolName)
       // 老数据补链：早期面板表里的内置角色行没有 `fallbackModels`（面板保存=显式配置→丢降级）。
       // 面板层从来不提供链的编辑入口，所以「缺失」只可能是历史遗留，补回内置链是安全的；
-      // 若不补，这 7 行会一直是"显式无链"状态，主路由挂了就被剪枝。
-      const hasChain = Array.isArray(existing.fallbackModels) && existing.fallbackModels.length > 0
+      // 只有字段缺失才走历史迁移；显式 [] 已被 Array.isArray 判为已有链，不补。
+      // 不补的话，历史行会在主路由不可用时因没有备用链而被剪枝。
+      const hasChain = Array.isArray(existing.fallbackModels)
       const builtinChain = Array.isArray(role.fallbackModels) ? role.fallbackModels : []
       out.push(!hasChain && builtinChain.length > 0
         ? { ...existing, fallbackModels: [...builtinChain] }
@@ -119,8 +120,14 @@ export class RolegroupCardController {
     this.options = options
     this.drafts = undefined        // Map<toolName, SectionRole> | undefined（undefined = 无草稿）
     this.draftRevision = undefined // 起草时的 scope revision（保存栅栏）
+    this.draftBaselineByName = new Map() // 原工具名 → 起草时规范化行（仅用于逐行 modified）
+    this.draftOriginByRow = new WeakMap() // 草稿对象 → 原工具名；新增行为 null
+    this.selectedToolName = this.effectiveRows()[0]?.toolName ?? null
+    this.focusToolName = null
     this.saving = false
     this.failed = false
+    this.failureKind = null
+    this.succeeded = false
     this.conflicted = false
     this.catalogGroups = []        // modelCatalog 原始 groups
     this.catalogDefault = undefined // modelCatalog.default（部署默认路由，用于一键补齐）
@@ -142,11 +149,12 @@ export class RolegroupCardController {
     return {
       hooks: { rolegroupCard: { getSnapshot: () => this.store.getSnapshot(), subscribe: (cb) => this.store.subscribe(cb) } },
       editRole: (toolName, field, text) => this.editRole(toolName, field, text),
+      selectRole: (toolName) => this.selectRole(toolName),
       addRole: () => this.addRole(),
       removeRole: (toolName) => this.removeRole(toolName),
-      save: () => { this.save() },
+      save: () => this.save(),
       discard: () => this.discard(),
-      restoreOfficial: () => { this.restoreOfficial() },
+      restoreOfficial: () => this.restoreOfficial(),
       retryCatalog: () => this.retryCatalog(),
       fillUnavailableRoutes: () => this.fillUnavailableRoutes(),
     }
@@ -194,7 +202,15 @@ export class RolegroupCardController {
   beginDraft() {
     if (this.drafts === undefined) {
       const snapshot = this.scope.getSnapshot()
-      this.drafts = new Map(this.effectiveRows().map((row) => [row.toolName, { ...row }]))
+      this.drafts = new Map()
+      this.draftBaselineByName = new Map()
+      this.draftOriginByRow = new WeakMap()
+      for (const row of this.effectiveRows()) {
+        const draft = { ...row }
+        this.drafts.set(row.toolName, draft)
+        this.draftBaselineByName.set(row.toolName, JSON.stringify(normalizeRow(row)))
+        this.draftOriginByRow.set(draft, row.toolName)
+      }
       this.draftRevision = snapshot.revision
     }
     return this.drafts
@@ -203,14 +219,63 @@ export class RolegroupCardController {
   clearDraft() {
     this.drafts = undefined
     this.draftRevision = undefined
+    this.draftBaselineByName = new Map()
+    this.draftOriginByRow = new WeakMap()
     this.failed = false
+    this.failureKind = null
     this.conflicted = false
+  }
+
+  visibleRows() {
+    return this.drafts !== undefined ? this.draftRows() : this.effectiveRows()
+  }
+
+  repairSelection(rows = this.visibleRows()) {
+    if (!rows.some((row) => row.toolName === this.selectedToolName)) {
+      this.selectedToolName = rows[0]?.toolName ?? null
+    }
+  }
+
+  selectRole(toolName) {
+    if (this.disposed || this.saving) return
+    if (!this.visibleRows().some((row) => row.toolName === toolName)) return
+    this.selectedToolName = toolName
+    this.focusToolName = null
+    this.publish()
+  }
+
+  dirtyRoleCount(rows) {
+    if (this.drafts === undefined) return 0
+    const survivingOrigins = new Set()
+    let count = 0
+    for (const row of rows) {
+      const origin = this.draftOriginByRow.get(row)
+      if (origin === null) {
+        count += 1
+        continue
+      }
+      if (origin === undefined) continue
+      survivingOrigins.add(origin)
+      if (JSON.stringify(normalizeRow(row)) !== this.draftBaselineByName.get(origin)) count += 1
+    }
+    for (const originalName of this.draftBaselineByName.keys()) {
+      if (!survivingOrigins.has(originalName)) count += 1
+    }
+    return count
   }
 
   editable() {
     const snapshot = this.scope.getSnapshot()
     if (this.disposed || this.saving || snapshot.status !== 'ready' || snapshot.writable !== true) return false
     return true
+  }
+
+  markEdited() {
+    this.succeeded = false
+    if (!this.conflicted) {
+      this.failed = false
+      this.failureKind = null
+    }
   }
 
   publish() {
@@ -221,10 +286,16 @@ export class RolegroupCardController {
     if (this.disposed) return
     // 外部（他处保存/热重载）推进了 revision：草稿与新生效值一致则静默收编，否则置冲突（对齐 C8）
     if (!this.saving && this.drafts !== undefined && this.scope.getSnapshot().revision !== this.draftRevision) {
+      this.succeeded = false
       if (serializeRows(this.effectiveRows()) === serializeRows(this.draftRows())) this.clearDraft()
-      else this.conflicted = true
+      else {
+        this.conflicted = true
+        this.failed = false
+        this.failureKind = null
+      }
     }
     this.lastTakeover = this.isTakeover()
+    this.repairSelection()
     this.publish()
   }
 
@@ -277,7 +348,7 @@ export class RolegroupCardController {
       // 目标模型的推理档位与旧模型无关：清掉，避免带着新模型不支持的档位保存。
       delete row.reasoningEffort
     }
-    this.failed = false
+    this.markEdited()
     this.publish()
   }
 
@@ -297,21 +368,22 @@ export class RolegroupCardController {
         delete row.reasoningEffort
       }
     }
-    this.failed = false
+    this.markEdited()
     this.publish()
   }
 
   renameRole(toolName, text) {
     const name = String(text ?? '').trim()
     if (name === toolName) return
-    if (!TOOL_NAME_RE.test(name)) return
+    if (!TOOL_NAME_RE.test(name) || Object.hasOwn(DEFAULT_ROLES, toolName)) return
     const drafts = this.beginDraft()
     const row = drafts.get(toolName)
     if (row === undefined || drafts.has(name)) return
-    drafts.delete(toolName)
     row.toolName = name
-    drafts.set(name, row)
-    this.failed = false
+    this.drafts = new Map([...drafts.entries()].map(([key, value]) => [key === toolName ? name : key, value]))
+    if (this.selectedToolName === toolName) this.selectedToolName = name
+    if (this.focusToolName === toolName) this.focusToolName = name
+    this.markEdited()
     this.publish()
   }
 
@@ -321,25 +393,37 @@ export class RolegroupCardController {
     let index = 1
     while (drafts.has(`role_${index}`)) index += 1
     const toolName = `role_${index}`
-    drafts.set(toolName, { toolName, provider: '', model: '' })
-    this.failed = false
+    const row = { toolName, provider: '', model: '' }
+    drafts.set(toolName, row)
+    this.draftOriginByRow.set(row, null)
+    this.selectedToolName = toolName
+    this.focusToolName = toolName
+    this.markEdited()
     this.publish()
   }
 
   removeRole(toolName) {
-    if (!this.editable()) return
-    const exists = this.drafts !== undefined
-      ? this.drafts.has(toolName)
-      : this.effectiveRows().some((row) => row.toolName === toolName)
-    if (!exists) return
+    if (!this.editable() || Object.hasOwn(DEFAULT_ROLES, toolName)) return
+    const rows = this.visibleRows()
+    const index = rows.findIndex((row) => row.toolName === toolName)
+    if (index < 0) return
     this.beginDraft().delete(toolName)
-    this.failed = false
+    if (this.selectedToolName === toolName) {
+      const remaining = rows.filter((row) => row.toolName !== toolName)
+      this.selectedToolName = (remaining[index] ?? remaining[index - 1] ?? null)?.toolName ?? null
+    }
+    this.focusToolName = null
+    this.repairSelection()
+    this.markEdited()
     this.publish()
   }
 
   discard() {
     if (this.saving || this.disposed) return
     this.clearDraft()
+    this.succeeded = false
+    this.focusToolName = null
+    this.repairSelection(this.effectiveRows())
     this.publish()
   }
 
@@ -351,31 +435,62 @@ export class RolegroupCardController {
     // 本地校验拦截：任何一行带非法字段 → 不发起 mutate
     if (this.draftRows().some((row) => invalidFieldsOf(row, this.effortsOf(row.provider, row.model)).length > 0)) {
       this.failed = true
+      this.failureKind = 'validation'
+      this.succeeded = false
       this.publish()
       return
     }
     // revision 栅栏：起草后他处保存过 → 冲突，拒发 mutate
     if (snapshot.revision !== this.draftRevision) {
       this.conflicted = true
+      this.failed = false
+      this.failureKind = null
+      this.succeeded = false
       this.publish()
       return
     }
     const generation = this.saveGeneration
+    const revision = this.draftRevision
+    const serializedDraft = serializeRows(this.draftRows())
+    const roles = this.draftRows().map(normalizeRow)
     this.saving = true
     this.failed = false
+    this.failureKind = null
+    this.succeeded = false
     this.conflicted = false
     this.publish()
     // 两个 op 一次提交：enabled=true 让 host 知道「面板已接管」（缺省 false = 未接管 → 回落内置表）；
     // roles 是整表。顺序无关（两个独立路径）。
-    await this.scope.mutate([
-      { op: 'set', path: ['enabled'], value: true },
-      { op: 'set', path: ['roles'], value: this.draftRows().map(normalizeRow) },
-    ], this.draftRevision)
+    try {
+      await this.scope.mutate([
+        { op: 'set', path: ['enabled'], value: true },
+        { op: 'set', path: ['roles'], value: roles },
+      ], revision)
+    } catch (error) {
+      if (generation !== this.saveGeneration || this.disposed) return
+      this.saving = false
+      const revisionDrift = this.scope.getSnapshot().revision !== revision
+      this.conflicted = error?.name === 'SettingsConflictError' || revisionDrift
+      this.failed = !this.conflicted
+      this.failureKind = this.conflicted ? null : 'write'
+      this.repairSelection()
+      this.publish()
+      return
+    }
     if (generation !== this.saveGeneration || this.disposed) return
-    const landed = serializeRows(this.effectiveRows()) === serializeRows(this.draftRows())
+    const landed = serializeRows(this.effectiveRows()) === serializedDraft
     this.saving = false
-    this.failed = !landed
-    if (landed) this.clearDraft()
+    if (landed) {
+      this.clearDraft()
+      this.succeeded = true
+      this.focusToolName = null
+      this.repairSelection(this.effectiveRows())
+    } else {
+      this.conflicted = this.scope.getSnapshot().revision !== revision
+      this.failed = !this.conflicted
+      this.failureKind = this.conflicted ? null : 'write'
+      this.repairSelection()
+    }
     this.publish()
   }
 
@@ -386,16 +501,52 @@ export class RolegroupCardController {
    * 不写任何模型名，所以以后内置默认变了会自动跟上，也不会因为抄写而产生过期副本。
    */
   async restoreOfficial() {
-    if (this.disposed || this.saving) return
-    if (this.scope.getSnapshot().writable !== true) return
-    this.clearDraft()
+    const snapshot = this.scope.getSnapshot()
+    if (this.disposed || this.saving || snapshot.status !== 'ready' || snapshot.writable !== true) return
+    const generation = this.saveGeneration
+    const revision = snapshot.revision
+    this.saving = true
+    this.failed = false
+    this.failureKind = null
+    this.succeeded = false
+    this.conflicted = false
     this.publish()
-    await this.scope.mutate([
-      { op: 'set', path: ['enabled'], value: true },
-      { op: 'set', path: ['roles'], value: [] },
-    ])
-    if (this.disposed) return
+    try {
+      await this.scope.mutate([
+        { op: 'set', path: ['enabled'], value: true },
+        { op: 'set', path: ['roles'], value: [] },
+      ])
+    } catch (error) {
+      if (generation !== this.saveGeneration || this.disposed) return
+      this.saving = false
+      this.conflicted = error?.name === 'SettingsConflictError' || this.scope.getSnapshot().revision !== revision
+      this.failed = !this.conflicted
+      this.failureKind = this.conflicted ? null : 'restore'
+      this.repairSelection()
+      this.publish()
+      return
+    }
+    if (generation !== this.saveGeneration || this.disposed) return
+    const landedSnapshot = this.scope.getSnapshot()
+    const landed = landedSnapshot.value?.enabled === true
+      && Array.isArray(landedSnapshot.value?.roles) && landedSnapshot.value.roles.length === 0
+    this.saving = false
+    if (landed) {
+      this.clearDraft()
+      this.succeeded = true
+      this.focusToolName = null
+      this.repairSelection(this.effectiveRows())
+    } else {
+      this.conflicted = landedSnapshot.revision !== revision
+      this.failed = !this.conflicted
+      this.failureKind = this.conflicted ? null : 'restore'
+      this.repairSelection()
+    }
     this.publish()
+  }
+
+  retryCatalog() {
+    return this.loadCatalog()
   }
 
   async loadCatalog() {
@@ -458,20 +609,36 @@ export class RolegroupCardController {
     const snapshot = this.scope.getSnapshot()
     const takeover = snapshot.value?.enabled === true
     const source = this.drafts !== undefined ? this.draftRows() : this.effectiveRows()
-    const rows = source.map((row) => ({
-      toolName: row.toolName,
-      provider: row.provider ?? '',
-      model: row.model ?? '',
-      reasoningEffort: row.reasoningEffort ?? '',
-      persona: row.persona ?? '',
-      summary: row.summary ?? '',
-      // 备用链随行暴露（面板不编辑它，但保存必须原样带回，见 normalizeRow）
-      ...(Array.isArray(row.fallbackModels) && row.fallbackModels.length > 0
-        ? { fallbackModels: [...row.fallbackModels] }
-        : {}),
-      isCustom: !Object.hasOwn(DEFAULT_ROLES, row.toolName),
-      invalidFields: invalidFieldsOf(row, this.effortsOf(row.provider, row.model)),
-    }))
+    const dirtyRoleCount = this.dirtyRoleCount(source)
+    const rows = source.map((row) => {
+      const origin = this.drafts !== undefined ? this.draftOriginByRow.get(row) : undefined
+      const modified = this.drafts !== undefined && (origin === null
+        || (origin !== undefined && JSON.stringify(normalizeRow(row)) !== this.draftBaselineByName.get(origin)))
+      return {
+        toolName: row.toolName,
+        provider: row.provider ?? '',
+        model: row.model ?? '',
+        reasoningEffort: row.reasoningEffort ?? '',
+        persona: row.persona ?? '',
+        summary: row.summary ?? '',
+        // 备用链随行暴露（面板不编辑它，但保存必须原样带回，见 normalizeRow）
+        ...(Array.isArray(row.fallbackModels)
+          ? { fallbackModels: [...row.fallbackModels] }
+          : {}),
+        isCustom: !Object.hasOwn(DEFAULT_ROLES, row.toolName),
+        modified,
+        invalidFields: invalidFieldsOf(row, this.effortsOf(row.provider, row.model)),
+      }
+    })
+    const selectedRow = rows.find((row) => row.toolName === this.selectedToolName) ?? null
+    const dirty = this.isDirty()
+    const saveFeedback = this.saving ? 'saving'
+      : this.conflicted ? 'conflict'
+        : this.failureKind === 'validation' ? 'validation-error'
+          : this.failureKind === 'write' ? 'write-error'
+            : this.failureKind === 'restore' ? 'restore-error'
+              : this.succeeded ? 'success'
+                : dirty ? 'dirty' : 'clean'
     return {
       available: snapshot.status === 'ready',
       writable: snapshot.writable === true,
@@ -482,9 +649,17 @@ export class RolegroupCardController {
       mode: takeover && (snapshot.value?.roles ?? []).length > 0 ? 'custom' : 'official',
       /** 覆盖行数（面板自定义时用于状态行显示）。 */
       overrides: (snapshot.value?.roles ?? []).length,
-      dirty: this.isDirty(),
+      dirty,
+      hasDrafts: this.drafts !== undefined,
+      dirtyRoleCount,
+      selectedToolName: selectedRow?.toolName ?? null,
+      selectedRow,
+      focusToolName: this.focusToolName,
       saving: this.saving,
       failed: this.failed,
+      failureKind: this.failureKind,
+      succeeded: this.succeeded,
+      saveFeedback,
       conflicted: this.conflicted,
       rows,
       catalog: { status: this.catalogStatus, groups: this.mergedGroups(rows), partial: this.catalogPartial },

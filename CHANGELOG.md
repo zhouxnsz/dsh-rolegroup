@@ -5,7 +5,44 @@
 
 > **历史注记**：`0.7.0` 发布前，npm 上的上一版本是 `0.6.1`；这期间开发中用过 0.6.2 / 0.6.3 / 0.8.0 等
 > 内部里程碑号但都没发布，所以 `0.7.0` 是**自 `0.6.1` 以来的累积变更**（按 semver 只升一个 minor，不跳号）。
-> 当前 npm 上的 latest 见 registry（2026-11-16 查 `dist-tags.latest` = `0.11.7`）。
+> 当前 npm 上的 latest 见 registry（2026-11-27 查 `dist-tags.latest` = `0.12.2`）。
+
+---
+
+## [0.13.0] — 2026-11-26
+
+### Changed
+
+- 设置页改为「角色列表 + 单角色编辑区 + 常显保存栏」，切换角色保留整张草稿；配置来源、角色来源和未保存修改分开显示。
+- 备用路由按配置顺序只读展示，空链有说明；主路由仍保留目录外的旧值。
+- 新增角色后选中并聚焦工具名；逐行标记修改，自定义角色可从列表或编辑器删除，内置角色没有删除入口。
+- `analyst` 内置绑定从 `qwen3.8-max` 更新为 `qwen4-max`；在本机 harness 完成事实核验与设计评审对照后换绑，未观察到质量回退。
+- README 中英两版改用本地化品牌 banner + 徽章 + 目录 + 功能概览；设置面板截图裁掉左侧导航后放进 §5，`assets/banners` 与 `assets/screenshots` 随 npm 包发布。
+
+### Fixed
+
+- 保存或恢复官方推荐失败时保留草稿并退出保存中状态；显式空 `fallbackModels` 在面板与 section 映射间不再被补成内置链。
+- 设置面板 clean 状态的禁用保存/放弃增加高特异度 `not-allowed` 光标（不再被通用 `cursor: default` 覆盖）与悬停说明，提示改为「没有未保存修改；改任意字段后可保存」，避免把禁用误判为按钮失效。
+- 新增、删除、重命名、外部快照更新后的选中项始终指向可见角色；补齐字段标签、错误关联、键盘焦点和窄屏布局。
+- summary 使用独立阅读高度并保留纵向 resize 与滚动条 gutter；主路由按容器 auto-fit，避免窄右栏固定三列截断完整值。禁用保存按钮不再叠 50% 透明，修改徽标正文与 warn 边框分开使用宿主 token。
+- 布局断点改为按**卡片容器宽度**（容器查询）而不是视口宽度。设置弹层正文只有约 600px，而视口约 1400px，原先按视口写的窄屏规则永不触发，编辑器被挤到约 290px。现在窄容器下改为「角色条在上、全宽编辑器在下」，角色标签隐藏冗余的「内置角色」chips、摘要按内容自适应高度（`field-sizing`，不支持时回落 140px）。
+
+### 验证
+
+- `npm test` 200 passed（新增 README 图片引用断言）；`npm run build:client` 在 UI 改动后成功，`git diff --check` 通过。新增 4 组行为回归，并在既有用例中补充 restore guard、嵌套 button 和真实 bundle 视觉结构断言。
+- 2026-11-27 analyst 换绑门槛：`qwen3.8-max` / `qwen4-max` 各跑事实核验 1 次、设计评审 1 次；启动报告确认候选实际走 `qwen4-max`、无降级。两版判定与引用均合格，候选额外完成只读运行时复核，并识别零覆盖跟随与 `reasoningEffort` 清理路径。
+- 24 个临时副本 mutation 均被对应断言拒绝，无 surviving。archive 旧实现复核在 T1-1 首个失败即终止，只作为 T1-1 证据；T2/T3/T4 的红来自此前分阶段运行。
+- 现有 3080 / dsh 0.2.2-rc.5 验证了 8 角色切换、跨角色草稿与放弃、新增/聚焦样式/本地校验/重命名/删除、备用链、模型切回、中英和 light/dark；全程未做有效配置保存。
+- 修复后 2891×1450 真机图确认 analyst/vision 摘要不再截成半行，provider 与模型标签完整显示；新增校验和 light/dark 保存栏的按钮、徽标可读性改善。测试后已放弃草稿并恢复 Light + 中文。
+- 容器查询落地后，在 3080 真实设置弹层（正文约 600px）复核：8 个角色一行铺开、编辑器全宽，`qwen-token-plan-cn` / `Qwen3.8 Max` 完整可见，analyst 与 vision 摘要均完整无裁切；证据见内部验收档案（不随仓库公开）。
+- UNVERIFIED：1280/768/390 视口与 DOM 几何测量、console、对比度数值、真实保存/恢复成功及真实写入失败/冲突；离线用例覆盖这些状态机路径。
+
+The settings section now uses a role list, a single-role editor, and an always-visible save bar. Drafts survive
+role switches and failed writes; source and modified states are separate. Fallback chains are read-only in
+configuration order, explicit empty chains round-trip, and legacy routes remain available. Selection repair,
+field accessibility, keyboard focus, and narrow layouts are covered by offline render tests. Summaries have
+room to read, route fields wrap by container width, and disabled actions and modified badges stay legible.
+The bilingual READMEs now use a localized hero banner, badges, a table of contents, and a cropped settings-panel screenshot in §5. Disabled Save/Discard actions now explain that an edit is required. The analyst built-in binding moves from qwen3.8-max to qwen4-max after a same-role fact and design comparison; the startup report confirms qwen4-max ran without fallback.
 
 ---
 
